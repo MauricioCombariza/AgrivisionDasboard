@@ -1,0 +1,15 @@
+orden,destino,fecha_recepcion,nombre_cliente,tipo_servicio,cantidad
+123273,local,2026-01-05,Leonisa,sobre,2
+123274,local,2026-01-05,Leonisa,sobre,66
+123275,nacional,2026-01-05,Banco Caja Social,sobre,575
+123276,nacional,2026-01-05,Banco Caja Social,sobre,551
+123277,local,2026-01-06,Banco Caja Social,sobre,4229
+123277,nacional,2026-01-06,Banco Caja Social,sobre,7674
+123278,local,2026-01-06,Banco Caja Social,sobre,62
+123278,nacional,2026-01-06,Banco Caja Social,sobre,64
+123279,local,2026-01-06,Vehigrupo SAS,sobre,845
+123279,nacional,2026-01-06,Vehigrupo SAS,sobre,2661
+123280,nacional,2026-01-07,Vehigrupo SAS,sobre,3
+123281,nacional,2026-01-07,Vehigrupo SAS,sobre,1
+123282,local,2026-01-07,Leonisa,sobre,372
+123283,local,2026-01-07,Leonisa,sobre,2

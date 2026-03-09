@@ -1,0 +1,143 @@
+================================================================
+ WHATSAPP SENDER - INSTRUCCIONES ULTRA SIMPLES
+================================================================
+
+PROBLEMA ACTUAL:
+Conda no esta en el PATH de Windows (esto es normal)
+
+================================================================
+ SOLUCION DEFINITIVA - USA ANACONDA PROMPT
+================================================================
+
+PASO 1: Abrir Anaconda Prompt
+------------------------------
+1. Presiona la tecla Windows
+2. Escribe: "Anaconda Prompt"
+3. Click en "Anaconda Prompt" (icono negro/verde)
+
+   Si NO aparece:
+   - Busca: "Miniconda Prompt"
+   - O busca: "Anaconda Powershell Prompt"
+
+
+PASO 2: Ejecutar la Aplicacion
+-------------------------------
+En la ventana de Anaconda Prompt, copia y pega estos 3 comandos
+(uno por uno, presiona Enter despues de cada uno):
+
+1. cd C:\Users\mcomb\Desktop\Carvajal\python\dashboard
+
+2. conda activate carvajal
+
+3. streamlit run pages\wa.py
+
+
+ESO ES TODO!
+Se abrira el navegador con la aplicacion.
+
+================================================================
+ COMANDOS COMPLETOS (Copia y pega todo junto)
+================================================================
+
+cd C:\Users\mcomb\Desktop\Carvajal\python\dashboard && conda activate carvajal && streamlit run pages\wa.py
+
+================================================================
+ SI NO ENCUENTRAS ANACONDA PROMPT
+================================================================
+
+OPCION 1: Buscar donde esta instalado conda
+--------------------------------------------
+Haz doble click en: BUSCAR_CONDA.bat
+
+Esto te dira donde esta instalado conda en tu sistema.
+
+
+OPCION 2: Buscar manualmente
+-----------------------------
+1. Presiona Windows + R
+2. Escribe: %USERPROFILE%
+3. Busca carpetas llamadas:
+   - anaconda3
+   - miniconda3
+
+4. Si las encuentras, abre:
+   anaconda3\Scripts\activate.bat
+   o
+   miniconda3\Scripts\activate.bat
+
+
+OPCION 3: Reinstalar Miniconda
+-------------------------------
+Si definitivamente no encuentras conda:
+
+1. Descarga Miniconda:
+   https://docs.conda.io/en/latest/miniconda.html
+
+2. Instala con opciones por defecto
+
+3. Busca "Anaconda Prompt" en el menu inicio
+
+4. Ejecuta los comandos del PASO 2
+
+================================================================
+ VERIFICAR QUE TODO FUNCIONE
+================================================================
+
+Despues de ejecutar los comandos, deberas ver:
+
+EN ANACONDA PROMPT:
+-------------------
+- Texto que dice "You can now view your Streamlit app..."
+- Una URL: http://localhost:8501
+- LOGS de la aplicacion (no cierres esta ventana)
+
+EN EL NAVEGADOR:
+----------------
+- La aplicacion de WhatsApp Sender
+- Boton para subir Excel
+- Botones para enviar mensajes
+
+================================================================
+ ANTES DE ENVIAR MENSAJES
+================================================================
+
+1. Abre Chrome
+2. Ve a: https://web.whatsapp.com
+3. Escanea el codigo QR
+4. Dejalo abierto y logueado
+5. Asegurate que MySQL este corriendo
+
+================================================================
+ NOTAS IMPORTANTES
+================================================================
+
+- NO cierres la ventana de Anaconda Prompt mientras uses la app
+- Los LOGS aparecen en Anaconda Prompt, NO en el navegador
+- Si cierras el navegador, puedes volver a http://localhost:8501
+- Para detener la app: Presiona Ctrl+C en Anaconda Prompt
+
+================================================================
+ PARA PROXIMAS VECES
+================================================================
+
+Solo necesitas repetir el PASO 1 y PASO 2:
+
+1. Abre "Anaconda Prompt"
+2. Ejecuta:
+   cd C:\Users\mcomb\Desktop\Carvajal\python\dashboard
+   conda activate carvajal
+   streamlit run pages\wa.py
+
+================================================================
+ ARCHIVOS DE AYUDA
+================================================================
+
+BUSCAR_CONDA.bat          - Encuentra donde esta conda
+0_VERIFICAR_SISTEMA.bat   - Verifica requisitos
+obtener_coordenadas.py    - Obtiene coordenadas del boton
+
+================================================================
+
+DUDAS: Lee INSTRUCCIONES_WINDOWS.md para guia completa
+
+================================================================

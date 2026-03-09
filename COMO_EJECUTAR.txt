@@ -1,0 +1,122 @@
+============================================================
+ COMO EJECUTAR - WhatsApp Sender
+============================================================
+
+PROBLEMA: PowerShell no reconoce 'conda' por defecto
+
+SOLUCION: Usa uno de estos 3 metodos (ordenados de mas facil a mas dificil)
+
+============================================================
+ METODO 1: ARCHIVO .BAT (MAS FACIL) ⭐ RECOMENDADO
+============================================================
+
+1. Abre el Explorador de Windows
+2. Ve a: C:\Users\mcomb\Desktop\Carvajal\python\dashboard
+3. HAZ DOBLE CLICK en:
+
+   ✅ 2_EJECUTAR_APP.bat
+
+4. Se abrira una ventana negra con los logs
+5. Se abrira el navegador con la aplicacion
+
+¡ESO ES TODO!
+
+============================================================
+ METODO 2: ANACONDA PROMPT
+============================================================
+
+1. Presiona Windows + S
+2. Busca: "Anaconda Prompt"
+3. Click en "Anaconda Prompt"
+4. Ejecuta estos comandos:
+
+   cd C:\Users\mcomb\Desktop\Carvajal\python\dashboard
+   conda activate carvajal
+   streamlit run pages\wa.py
+
+============================================================
+ METODO 3: POWERSHELL (Avanzado)
+============================================================
+
+Solo funciona si has inicializado conda en PowerShell.
+
+1. Abre PowerShell
+2. Ejecuta:
+
+   cd C:\Users\mcomb\Desktop\Carvajal\python\dashboard
+   .\ejecutar.ps1
+
+Si da error, usa el Metodo 1 o 2.
+
+============================================================
+ ANTES DE ENVIAR MENSAJES
+============================================================
+
+✅ Abre WhatsApp Web en Chrome
+✅ Escanea el codigo QR con tu telefono
+✅ Mantente logueado
+✅ Asegurate que MySQL este corriendo
+✅ Prepara tu archivo Excel con columna 'serial'
+
+============================================================
+ QUE VERAS
+============================================================
+
+EN LA VENTANA NEGRA (CMD/Terminal):
+-----------------------------------
+🚀 INICIANDO ENVIO DE MENSAJE
+📱 Numero: +573192240094
+🌐 Chrome encontrado: C:\Program Files\...
+🔄 Abriendo Chrome...
+⏳ Esperando 15 segundos...
+🎯 Usando coordenadas: (960, 1026)
+📺 Tamaño de pantalla: 1920x1080
+🖱️  Posicion actual: (1910, 66)
+➡️  Moviendo mouse a (960, 1026)...
+✅ Mouse movido a: (960, 1026)
+🖱️  Haciendo click...
+✅ Click ejecutado
+✅ ENVIO COMPLETADO
+
+EN EL NAVEGADOR:
+---------------
+- Progreso visual de los envios
+- Botones para iniciar/pausar
+- Configuracion de coordenadas
+
+============================================================
+ SOLUCION DE PROBLEMAS
+============================================================
+
+PROBLEMA: "conda no se reconoce"
+SOLUCION: Usa el METODO 1 (archivo .bat)
+
+PROBLEMA: "El mouse no se mueve"
+SOLUCION: Asegurate de estar ejecutando desde Windows
+          (NO desde WSL). Usa archivo .bat
+
+PROBLEMA: "No envia mensajes"
+SOLUCION:
+  1. Revisa los logs en la ventana negra
+  2. Ejecuta: python obtener_coordenadas.py
+  3. Configura las coordenadas en la app
+
+PROBLEMA: "Chrome no se encuentra"
+SOLUCION: Edita pages\wa.py linea 64
+
+============================================================
+ ARCHIVOS IMPORTANTES
+============================================================
+
+2_EJECUTAR_APP.bat        <- EJECUTAR APLICACION (FACIL)
+obtener_coordenadas.py    <- Obtener coordenadas
+test_pyautogui.py         <- Probar PyAutoGUI
+LEEME_WINDOWS.txt         <- Guia rapida
+INSTRUCCIONES_WINDOWS.md  <- Guia completa
+
+============================================================
+
+RECOMENDACION: Usa el archivo .bat (Metodo 1)
+               Es el metodo mas simple y siempre funciona
+
+============================================================

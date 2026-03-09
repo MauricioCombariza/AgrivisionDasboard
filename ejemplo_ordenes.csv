@@ -1,0 +1,9 @@
+orden,destino,fecha_recepcion,nombre_cliente,tipo_servicio,cantidad
+ORD-2026-001,local,2026-01-08,Distribuidora XYZ,sobres,500
+ORD-2026-002,local,2026-01-08,Distribuidora XYZ,paquetes,300
+ORD-2026-003,nacional,2026-01-08,Empresa ABC,sobres,450
+ORD-2026-004,nacional,2026-01-08,Empresa ABC,paquetes,250
+ORD-2026-005,local,2026-01-09,Corporación DEF,sobres,600
+ORD-2026-006,nacional,2026-01-09,Distribuidora XYZ,paquetes,180
+ORD-2026-007,local,2026-01-09,Empresa ABC,sobres,350
+ORD-2026-008,nacional,2026-01-10,Corporación DEF,paquetes,420

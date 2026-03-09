@@ -1,0 +1,117 @@
+================================================================
+ WHATSAPP SENDER - EMPIEZA AQUI
+================================================================
+
+PROBLEMA DETECTADO:
+El ambiente 'carvajal' esta en WSL (Linux), no en Windows
+Conda de Windows y conda de WSL son instalaciones separadas
+
+================================================================
+ SOLUCION - 2 PASOS SIMPLES
+================================================================
+
+PASO 1: INSTALAR AMBIENTE EN WINDOWS
+-------------------------------------
+
+Haz doble click en este archivo:
+
+    >>> 1_INSTALAR_AMBIENTE.bat
+
+Esto hara:
+  - Crear el ambiente 'carvajal' en Windows conda
+  - Instalar Python 3.12
+  - Instalar todas las dependencias (streamlit, pandas, etc.)
+
+Tiempo: 3-5 minutos
+Requiere internet
+
+
+PASO 2: EJECUTAR LA APLICACION
+-------------------------------
+
+Despues de que termine el PASO 1, haz doble click en:
+
+    >>> 2_EJECUTAR_APP.bat
+
+Esto hara:
+  - Activar el ambiente 'carvajal'
+  - Iniciar Streamlit
+  - Abrir el navegador con la aplicacion
+
+
+ESO ES TODO!
+
+================================================================
+ ALTERNATIVA - DESDE ANACONDA PROMPT
+================================================================
+
+Si prefieres hacerlo manualmente, abre "Anaconda Prompt" y ejecuta:
+
+1. Crear el ambiente:
+
+   conda create -n carvajal python=3.12 -y
+
+2. Activar el ambiente:
+
+   conda activate carvajal
+
+3. Instalar dependencias:
+
+   pip install streamlit pandas pyautogui mysql-connector-python openpyxl pillow numpy
+
+4. Navegar a la carpeta:
+
+   cd C:\Users\mcomb\Desktop\Carvajal\python\dashboard
+
+5. Ejecutar la aplicacion:
+
+   streamlit run pages\wa.py
+
+================================================================
+ ANTES DE USAR LA APLICACION
+================================================================
+
+1. Abre WhatsApp Web en Chrome
+2. Escanea el codigo QR con tu telefono
+3. Mantente logueado
+4. Asegurate que MySQL este corriendo
+5. Prepara tu archivo Excel con columna 'serial'
+
+================================================================
+ ARCHIVOS IMPORTANTES
+================================================================
+
+1_INSTALAR_AMBIENTE.bat      <- EJECUTA PRIMERO (solo una vez)
+2_EJECUTAR_APP.bat            <- EJECUTA CADA VEZ que uses la app
+BUSCAR_CONDA.bat              <- Encuentra donde esta conda
+obtener_coordenadas.py        <- Obtiene coordenadas del boton
+
+================================================================
+ SOLUCION DE PROBLEMAS
+================================================================
+
+PROBLEMA: "conda no se reconoce"
+SOLUCION: Abre "Anaconda Prompt" en lugar de CMD normal
+
+PROBLEMA: "No se pudo crear el ambiente"
+SOLUCION: Verifica que tienes internet y espacio en disco
+
+PROBLEMA: "El mouse no se mueve"
+SOLUCION: Ejecuta desde Windows (NO desde WSL)
+          Usa obtener_coordenadas.py para ajustar
+
+================================================================
+ RESUMEN RAPIDO
+================================================================
+
+1. Doble click en: 1_INSTALAR_AMBIENTE.bat
+2. Espera 3-5 minutos
+3. Doble click en: 2_EJECUTAR_APP.bat
+4. Usa la aplicacion en el navegador
+
+================================================================
+
+Tiempo total: ~5 minutos (primera vez)
+Proximas veces: solo ejecuta 2_EJECUTAR_APP.bat
+
+================================================================

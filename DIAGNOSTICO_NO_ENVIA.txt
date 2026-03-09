@@ -1,0 +1,183 @@
+================================================================
+ DIAGNOSTICO - NO ENVIA MENSAJES AUTOMATICAMENTE
+================================================================
+
+PROBLEMA: Streamlit corre pero no envia los mensajes
+
+SOLUCION: Vamos a diagnosticar paso por paso
+
+================================================================
+ DIAGNOSTICO - 3 TESTS
+================================================================
+
+TEST 1: VERIFICAR QUE PYAUTOGUI FUNCIONA
+-----------------------------------------
+
+Haz doble click en:
+
+    >>> 3_TEST_MOUSE.bat
+
+¿Qué deberías ver?
+  - El mouse se mueve al centro de la pantalla
+  - El mouse se mueve a (960, 1026)
+  - Se hace un click
+
+¿Se movió el mouse visualmente?
+  - SÍ: PyAutoGUI funciona. Continúa con TEST 2
+  - NO: Hay un problema con PyAutoGUI. Ver SOLUCIONES al final
+
+
+TEST 2: VERIFICAR PROCESO COMPLETO DE ENVÍO
+--------------------------------------------
+
+Haz doble click en:
+
+    >>> 4_TEST_ENVIO.bat
+
+Sigue las instrucciones en pantalla.
+
+Este test hace:
+  1. Abre Chrome con WhatsApp Web
+  2. Espera 20 segundos
+  3. Mueve el mouse al botón de envío
+  4. Hace click
+
+OBSERVA CADA PASO y responde:
+  - ¿Se abrió Chrome?
+  - ¿Se cargó WhatsApp Web?
+  - ¿Viste el mouse moverse?
+  - ¿Hizo click en el botón correcto?
+  - ¿Se envió el mensaje?
+
+
+TEST 3: OBTENER COORDENADAS EXACTAS
+------------------------------------
+
+Si el TEST 2 mostró que el mouse se mueve pero NO hace click
+en el botón correcto, necesitas obtener las coordenadas exactas.
+
+En Anaconda Prompt ejecuta:
+
+    conda activate carvajal
+    python obtener_coordenadas.py
+
+Instrucciones:
+  1. Abre WhatsApp Web MAXIMIZADO
+  2. Mueve el mouse sobre el BOTÓN DE ENVÍO (flecha verde)
+  3. Presiona Ctrl+C
+  4. Anota las coordenadas X e Y
+
+Luego en la app de Streamlit:
+  - Abre "Configuración Avanzada"
+  - Ingresa las coordenadas X e Y
+  - Vuelve a probar
+
+================================================================
+ CHECKLIST ANTES DE ENVIAR
+================================================================
+
+Marca cada item:
+
+[ ] WhatsApp Web abierto en Chrome
+[ ] Sesión de WhatsApp activa (QR escaneado)
+[ ] Chrome MAXIMIZADO (no ventana pequeña)
+[ ] Chrome al 100% de zoom (Ctrl+0)
+[ ] MySQL corriendo (si aplica)
+[ ] Archivo Excel con columna 'serial'
+[ ] Ejecutando desde Windows (NO WSL)
+[ ] Ambiente 'carvajal' activado
+
+================================================================
+ PROBLEMAS COMUNES Y SOLUCIONES
+================================================================
+
+PROBLEMA: El mouse NO se mueve en ningún test
+SOLUCION:
+  1. Reinstala PyAutoGUI:
+     conda activate carvajal
+     pip uninstall pyautogui -y
+     pip install pyautogui
+
+  2. Verifica permisos:
+     Ejecuta como administrador
+
+  3. Verifica que no haya software de seguridad bloqueando
+
+
+PROBLEMA: El mouse se mueve pero NO hace click en el botón
+SOLUCION:
+  1. Las coordenadas están mal
+  2. Ejecuta: python obtener_coordenadas.py
+  3. Configura las coordenadas en la app
+
+
+PROBLEMA: Chrome no se abre
+SOLUCION:
+  1. Edita pages\wa.py línea 64
+  2. Cambia la ruta de Chrome manualmente
+
+
+PROBLEMA: WhatsApp Web no carga a tiempo
+SOLUCION:
+  1. Aumenta el tiempo de espera
+  2. Edita pages\wa.py línea 73
+  3. Cambia time.sleep(15) a time.sleep(25)
+
+
+PROBLEMA: El mensaje se escribe pero no se envía
+SOLUCION:
+  1. Las coordenadas del botón están mal
+  2. Usa obtener_coordenadas.py
+  3. Configura en "Configuración Avanzada"
+
+
+PROBLEMA: Se envía pero cierra antes de completar
+SOLUCION:
+  1. Aumenta el tiempo después del click
+  2. Edita pages\wa.py línea 92
+  3. Cambia time.sleep(3) a time.sleep(5)
+
+================================================================
+ INFORMACION PARA DEBUGGING
+================================================================
+
+Cuando ejecutes la app desde Anaconda Prompt, verás logs como:
+
+============================================================
+🚀 INICIANDO ENVÍO DE MENSAJE
+============================================================
+📱 Número: +573001234567
+🌐 Chrome encontrado: C:\Program Files\...
+🔄 Abriendo Chrome...
+⏳ Esperando 15 segundos...
+🎯 Usando coordenadas: (960, 1026)
+📺 Tamaño de pantalla: 1920x1080
+🖱️  Posición actual del mouse: (500, 600)
+➡️  Moviendo mouse a (960, 1026)...
+✅ Mouse movido a: (960, 1026)
+🖱️  Haciendo click en (960, 1026)...
+✅ Click ejecutado
+✅ ENVÍO COMPLETADO
+
+Comparte estos logs para diagnóstico más detallado.
+
+================================================================
+ VALORES POR DEFECTO ACTUALES
+================================================================
+
+Coordenadas del botón de envío: X=960, Y=1026
+Tiempo de espera de carga: 15 segundos
+Tiempo después del click: 3 segundos
+Tiempo antes del siguiente: 5 segundos
+
+================================================================
+ PROXIMOS PASOS
+================================================================
+
+1. Ejecuta TEST 1 (3_TEST_MOUSE.bat)
+2. Si pasa, ejecuta TEST 2 (4_TEST_ENVIO.bat)
+3. Si falla, ejecuta TEST 3 (obtener_coordenadas.py)
+4. Ajusta configuración según resultados
+5. Prueba con 1 mensaje en la app real
+
+================================================================

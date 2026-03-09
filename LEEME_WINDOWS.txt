@@ -1,0 +1,114 @@
+============================================================
+ WHATSAPP SENDER - GUIA RAPIDA WINDOWS
+============================================================
+
+PROBLEMA RESUELTO:
+PyAutoGUI no funciona desde WSL2. Ahora ejecutaremos desde Windows
+usando el mismo ambiente conda 'carvajal' que ya tienes.
+
+============================================================
+ PASOS PARA EJECUTAR
+============================================================
+
+1. VERIFICAR SISTEMA (Primera vez)
+   Haz doble click en:
+   >> 0_VERIFICAR_SISTEMA.bat
+
+   Esto verifica:
+   - Conda instalado
+   - Ambiente 'carvajal' existe
+   - Chrome instalado
+   - MySQL corriendo
+   - PyAutoGUI instalado
+
+2. INSTALAR PYAUTOGUI (Solo si falta)
+   Si el paso 1 dice que falta PyAutoGUI:
+   >> 1_INSTALAR_AMBIENTE.bat
+
+3. EJECUTAR APLICACION
+   Haz doble click en:
+   >> 2_EJECUTAR_APP.bat
+
+   IMPORTANTE:
+   - NO CIERRES LA VENTANA NEGRA (CMD)
+   - Ahi veras los LOGS de cada envio
+   - El navegador se abrira automaticamente
+
+============================================================
+ ANTES DE ENVIAR MENSAJES
+============================================================
+
+1. Abre Chrome y ve a: https://web.whatsapp.com
+2. Escanea el codigo QR con tu telefono
+3. Mantente logueado
+4. Asegurate que MySQL este corriendo
+5. Prepara tu archivo Excel con columna 'serial'
+
+============================================================
+ COORDENADAS DEL BOTON DE ENVIO
+============================================================
+
+Coordenadas predeterminadas: X=960, Y=1026
+
+Si no funciona en tu pantalla:
+1. Ejecuta: python obtener_coordenadas.py
+2. Sigue las instrucciones
+3. Configura en la app (Configuracion Avanzada)
+
+============================================================
+ SOLUCION DE PROBLEMAS
+============================================================
+
+PROBLEMA: "El mouse no se mueve"
+SOLUCION: Estas en WSL. Ejecuta los archivos .bat desde
+          Windows (explora la carpeta en el Explorador
+          de Windows y haz doble click)
+
+PROBLEMA: "Chrome no se encuentra"
+SOLUCION: Edita pages\wa.py linea 64
+
+PROBLEMA: "Error de MySQL"
+SOLUCION: Verifica que MySQL este corriendo
+
+PROBLEMA: "No envia mensajes"
+SOLUCION:
+   1. Revisa los LOGS en la ventana CMD
+   2. Usa obtener_coordenadas.py para ajustar
+   3. Asegurate que WhatsApp Web este logueado
+
+============================================================
+ ESTRUCTURA DE ARCHIVOS
+============================================================
+
+0_VERIFICAR_SISTEMA.bat      <- Verificar requisitos
+1_INSTALAR_AMBIENTE.bat       <- Instalar PyAutoGUI
+2_EJECUTAR_APP.bat            <- Ejecutar aplicacion
+obtener_coordenadas.py        <- Obtener coordenadas
+test_pyautogui.py             <- Probar PyAutoGUI
+pages\wa.py                   <- Aplicacion principal
+
+============================================================
+ NOTAS IMPORTANTES
+============================================================
+
+- Ejecuta SIEMPRE desde Windows (NO desde WSL)
+- NO muevas el mouse durante los envios
+- Chrome debe estar al 100% de zoom (Ctrl+0)
+- Prueba con 2-3 contactos antes de envios masivos
+- Los LOGS aparecen en la ventana CMD, NO en el navegador
+
+============================================================
+ RENDIMIENTO
+============================================================
+
+- Tiempo por mensaje: ~25 segundos
+- Mensajes por hora: ~144 mensajes
+- Recomendado: Maximo 50-100 por sesion
+
+============================================================
+
+Para mas informacion lee:
+- INSTRUCCIONES_WINDOWS.md (Guia completa)
+- INSTRUCCIONES_WHATSAPP.md (Detalles tecnicos)
+
+============================================================

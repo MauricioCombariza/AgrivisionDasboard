@@ -1,0 +1,129 @@
+====================================================
+  SISTEMAS DISPONIBLES - AGRIVISION
+====================================================
+
+Tienes 2 sistemas independientes en esta carpeta:
+
+┌─────────────────────────────────────────────────┐
+│ 1. SISTEMA DE LOGÍSTICA                        │
+├─────────────────────────────────────────────────┤
+│ Ejecutar: INICIAR_LOGISTICA.bat                │
+│ Archivo principal: home_logistica.py           │
+│ Páginas: pages_logistica/                      │
+│ URL: http://localhost:8502                      │
+│                                                 │
+│ Gestiona:                                       │
+│ ✓ Clientes y Precios                           │
+│ ✓ Personal (mensajeros, couriers)              │
+│ ✓ Órdenes y Tracking                           │
+│ ✓ Facturación                                  │
+│ ✓ Reportes de Rentabilidad                     │
+└─────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────┐
+│ 2. SISTEMA WHATSAPP / iMILE                     │
+├─────────────────────────────────────────────────┤
+│ Ejecutar: INICIAR_WHATSAPP.bat                 │
+│ Archivo principal: home.py                      │
+│ Páginas: pages_home/                           │
+│ URL: http://localhost:8501                      │
+│                                                 │
+│ Gestiona:                                       │
+│ ✓ Envío mensajes WhatsApp                      │
+│ ✓ Captura iMile                                │
+│ ✓ Gestión de paquetes                          │
+│ ✓ Planillas                                    │
+└─────────────────────────────────────────────────┘
+
+====================================================
+  CÓMO FUNCIONA
+====================================================
+
+Cada archivo .bat:
+1. Activa automáticamente las páginas correctas
+2. Inicia el servidor Streamlit
+3. Abre tu navegador
+4. Al cerrar, restaura la configuración original
+
+Esto permite ejecutar ambos sistemas sin conflictos.
+
+====================================================
+  CÓMO USAR
+====================================================
+
+OPCIÓN 1: Usar archivos .bat (RECOMENDADO)
+   → Doble clic en INICIAR_LOGISTICA.bat
+   → Doble clic en INICIAR_WHATSAPP.bat
+
+OPCIÓN 2: Desde línea de comandos
+   → streamlit run home_logistica.py --server.port=8502
+   → streamlit run home.py --server.port=8501
+   (Debes activar manualmente las carpetas pages)
+
+Para DETENER cualquier sistema:
+   → Cierra la ventana de comando, o
+   → Presiona Ctrl+C en la ventana de comando
+
+====================================================
+  ESTRUCTURA DE CARPETAS
+====================================================
+
+dashboard/
+├── home_logistica.py        Sistema de Logística
+├── home.py                  Sistema WhatsApp/iMile
+├── pages_logistica/         Páginas de Logística (5)
+│   ├── 1_Clientes_Precios.py
+│   ├── 2_Personal.py
+│   ├── 3_Ordenes.py
+│   ├── 4_Facturacion.py
+│   └── 5_Reportes.py
+├── pages_home/              Páginas de WhatsApp (~18)
+│   ├── wa.py
+│   ├── captura_imile.py
+│   ├── Paquetes.py
+│   └── ... (más páginas)
+└── pages/                   ← Carpeta temporal
+    (Se crea/borra automáticamente por los .bat)
+
+====================================================
+  PRIMER USO - SISTEMA DE LOGÍSTICA
+====================================================
+
+Si nunca has usado el sistema de logística:
+
+1. Ejecuta SOLO UNA VEZ: INICIALIZAR_BD_LOGISTICA.bat
+   (Esto crea la base de datos y las tablas)
+
+2. Luego ejecuta: INICIAR_LOGISTICA.bat
+
+3. Configura el sistema en este orden:
+   Paso 1: Registra tus clientes
+   Paso 2: Configura precios por cliente
+   Paso 3: Registra tu personal
+   Paso 4: Asigna tarifas a couriers externos
+   Paso 5: ¡Listo para crear órdenes!
+
+====================================================
+  EJECUTAR AMBOS SISTEMAS A LA VEZ
+====================================================
+
+Sí, puedes ejecutar ambos sistemas simultáneamente:
+
+1. Doble clic en INICIAR_LOGISTICA.bat
+   → Se abre en http://localhost:8502
+
+2. Doble clic en INICIAR_WHATSAPP.bat
+   → Se abre en http://localhost:8501
+
+Cada uno usa su propio puerto y páginas, sin conflictos.
+
+====================================================
+  SOPORTE
+====================================================
+
+Para dudas o problemas, revisa:
+- README_LOGISTICA.md (documentación completa)
+- INSTRUCCIONES_WHATSAPP.md
+- INSTRUCCIONES_WINDOWS.md
+
+====================================================
