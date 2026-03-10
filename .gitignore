@@ -2,6 +2,7 @@
 .env
 .agents/
 .claude/
+auth/users.yaml
 __pycache__/
 *.pyc
 *.pyo

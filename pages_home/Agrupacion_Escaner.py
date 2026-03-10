@@ -410,15 +410,29 @@ with tab1:
     st.divider()
 
     # =====================================================
-    # PROCESAR SOLO FECHAS PENDIENTES DEL AÑO
+    # SELECTOR DE FECHAS A PROCESAR (independiente del sync)
     # =====================================================
-    if not fechas_pendientes:
-        st.success(f"No hay fechas pendientes para {anio_seleccionado}. Todo esta sincronizado.")
-    else:
-        df_filtrado = df_anio[df_anio['f_esc'].isin(fechas_pendientes)].copy()
-        st.info(f"Procesando fechas pendientes de {anio_seleccionado}: {len(fechas_pendientes)} fechas — {len(df_filtrado):,} registros")
+    st.markdown("### Seleccionar Fechas a Procesar")
 
-    if fechas_pendientes and not df_filtrado.empty:
+    df_filtrado = pd.DataFrame()  # inicializar para evitar NameError
+    todas_las_fechas = sorted(df_anio['f_esc'].unique(), reverse=True)
+
+    # Pre-seleccionar fechas pendientes si las hay, sino dejar vacío
+    default_fechas = fechas_pendientes if fechas_pendientes else []
+
+    fechas_seleccionadas = st.multiselect(
+        "Fechas a procesar (puedes seleccionar cualquier fecha, incluso las ya sincronizadas):",
+        options=todas_las_fechas,
+        default=default_fechas
+    )
+
+    if not fechas_seleccionadas:
+        st.info("Selecciona una o más fechas arriba para procesar y gestionar mensajeros.")
+    else:
+        df_filtrado = df_anio[df_anio['f_esc'].isin(fechas_seleccionadas)].copy()
+        st.info(f"Procesando {len(fechas_seleccionadas)} fechas seleccionadas — {len(df_filtrado):,} registros")
+
+    if fechas_seleccionadas and not df_filtrado.empty:
 
         # Agrupacion jerarquica: f_esc > cod_men > lot_esc > orden
         # Nota: cod_sec se excluye de la agrupacion para que todos los seriales de la misma planilla se sumen

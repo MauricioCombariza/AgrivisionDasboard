@@ -1,0 +1,15 @@
+[Unit]
+Description=Carvajal Dashboard
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/carvajal
+Environment=PATH=/root/miniconda3/envs/carvajal/bin
+ExecStart=/root/miniconda3/envs/carvajal/bin/streamlit run app.py --server.port=8501 --server.address=127.0.0.1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

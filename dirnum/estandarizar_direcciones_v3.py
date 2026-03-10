@@ -686,7 +686,17 @@ _LOCALIDADES      = None   # dict {codigo_postal: localidad}
 def _cargar_limites_postales():
     ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         'limites_estandarizados.xlsx')
-    return pd.read_excel(ruta)
+    df = pd.read_excel(ruta)
+    # El Excel a veces exporta las columnas este/oeste con nombres vacíos
+    rename = {}
+    cols = df.columns.tolist()
+    if 'limite_este' not in cols and 'limite_' in cols:
+        rename['limite_'] = 'limite_este'
+    if 'limite_oeste' not in cols and 'limite_.1' in cols:
+        rename['limite_.1'] = 'limite_oeste'
+    if rename:
+        df = df.rename(columns=rename)
+    return df
 
 
 def _parsear_via_limite(via_str):

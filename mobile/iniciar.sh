@@ -16,4 +16,4 @@ echo "  ║  Misma WiFi:  http://${IP}:8502         ║"
 echo "  ╚══════════════════════════════════════════════╝"
 echo ""
 
-/home/mauro/miniconda3/bin/streamlit run home.py
+/home/mauro/miniconda3/bin/streamlit run home.py --server.address=0.0.0.0 --server.port=8502
