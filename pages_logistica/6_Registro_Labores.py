@@ -929,6 +929,96 @@ with tab2:
                             del st.session_state['pendiente_pdf_pegado']
                             st.rerun()
 
+                # ── Buscar PDF de fechas anteriores ───────────────────────────
+                st.divider()
+                with st.expander("🔍 Buscar planilla de una fecha anterior"):
+                    col_h1, col_h2 = st.columns([1, 2])
+                    with col_h1:
+                        fecha_hist = st.date_input(
+                            "Fecha a consultar",
+                            value=date.today(),
+                            key="hist_pegado_fecha"
+                        )
+                    with col_h2:
+                        if st.button("🔎 Consultar", key="btn_hist_pegado"):
+                            try:
+                                cur_h = conn.cursor(dictionary=True)
+                                cur_h.execute("""
+                                    SELECT
+                                        p.codigo,
+                                        p.nombre AS nombre,
+                                        rl.cantidad,
+                                        rl.tarifa_unitaria,
+                                        rl.id AS consecutivo,
+                                        o.numero_orden,
+                                        c.nombre_empresa AS cliente
+                                    FROM registro_labores rl
+                                    JOIN personal p ON rl.personal_id = p.id
+                                    JOIN ordenes o ON rl.orden_id = o.id
+                                    JOIN clientes c ON o.cliente_id = c.id
+                                    WHERE rl.fecha = %s AND rl.tipo_labor = 'pegado_guia'
+                                    ORDER BY p.codigo
+                                """, (fecha_hist,))
+                                rows_hist = cur_h.fetchall()
+                                cur_h.close()
+
+                                if not rows_hist:
+                                    st.warning("No hay registros de pegado para esa fecha.")
+                                else:
+                                    st.session_state['hist_pegado_rows'] = rows_hist
+                                    st.session_state['hist_pegado_fecha'] = fecha_hist
+                            except Exception as e_h:
+                                st.error(f"Error consultando: {e_h}")
+
+                    # Mostrar resultados y botón de descarga
+                    if st.session_state.get('hist_pegado_rows') and st.session_state.get('hist_pegado_fecha') == fecha_hist:
+                        rows_hist = st.session_state['hist_pegado_rows']
+
+                        # Agrupar por orden (puede haber varias órdenes en el mismo día)
+                        from collections import defaultdict
+                        grupos = defaultdict(list)
+                        for r in rows_hist:
+                            orden_lbl = f"{r['numero_orden']} - {r['cliente']}"
+                            grupos[orden_lbl].append(r)
+
+                        for orden_lbl, filas_g in grupos.items():
+                            tarifa_g = float(filas_g[0]['tarifa_unitaria'])
+                            total_g = sum(f['cantidad'] for f in filas_g)
+
+                            st.markdown(f"**Orden:** {orden_lbl} — {len(filas_g)} trabajador(es) — {total_g:,} guías — ${total_g * tarifa_g:,.0f}")
+
+                            # Construir data para generar PDF (sin inicial/final, no se guarda en BD)
+                            filas_pdf = [
+                                {
+                                    'codigo': f['codigo'],
+                                    'nombre': f['nombre'],
+                                    'inicial': '—',
+                                    'final': '—',
+                                    'cantidad': f['cantidad'],
+                                }
+                                for f in filas_g
+                            ]
+                            hist_pdf_data = {
+                                'fecha': fecha_hist,
+                                'orden': orden_lbl,
+                                'filas': filas_pdf,
+                                'tarifa': tarifa_g,
+                                'consecutivos': [f['consecutivo'] for f in filas_g],
+                            }
+                            try:
+                                pdf_bytes_h = generar_pdf_pegado(hist_pdf_data)
+                                orden_slug = str(filas_g[0]['numero_orden'])
+                                fecha_slug = fecha_hist.strftime('%Y-%m-%d')
+                                st.download_button(
+                                    label=f"📄 Descargar PDF — Orden {orden_slug}",
+                                    data=pdf_bytes_h,
+                                    file_name=f"pegado_guias_{fecha_slug}_orden{orden_slug}.pdf",
+                                    mime="application/pdf",
+                                    key=f"dl_hist_{fecha_slug}_{orden_slug}",
+                                )
+                            except Exception as e_pdf_h:
+                                st.error(f"Error generando PDF: {e_pdf_h}")
+
             # =============================================
             # TRANSPORTE COMPLETO: mensajero fijo, filas por fecha/orden
             # =============================================
