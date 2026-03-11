@@ -90,6 +90,7 @@ PAGES_PAQUETES = [
     st.Page("pages_home/Ventas.py", title="Ventas"),
     st.Page("pages_home/wa.py", title="WhatsApp Sender"),
     st.Page("pages_home/whatsapp.py", title="Notificación Paquetes"),
+    st.Page("pages_home/SincronizarVPS.py", title="Sincronizar VPS", icon="🔄"),
 ]
 
 paginas = {"Dashboard": PAGES_DASHBOARD}
