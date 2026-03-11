@@ -59,11 +59,13 @@ def generar_pdf_pegado(data: dict) -> bytes:
         cant = f['cantidad']
         total = cant * tarifa
         total_guias += cant
+        ini = f"{f['inicial']:,}" if isinstance(f['inicial'], int) else str(f['inicial'])
+        fin = f"{f['final']:,}" if isinstance(f['final'], int) else str(f['final'])
         rows.append([
             f['codigo'],
             f['nombre'],
-            f"{f['inicial']:,}",
-            f"{f['final']:,}",
+            ini,
+            fin,
             f"{cant:,}",
             f"${tarifa:,.4f}",
             f"${total:,.0f}",
@@ -966,12 +968,12 @@ with tab2:
                                     st.warning("No hay registros de pegado para esa fecha.")
                                 else:
                                     st.session_state['hist_pegado_rows'] = rows_hist
-                                    st.session_state['hist_pegado_fecha'] = fecha_hist
+                                    st.session_state['hist_pegado_fecha_result'] = fecha_hist
                             except Exception as e_h:
                                 st.error(f"Error consultando: {e_h}")
 
                     # Mostrar resultados y botón de descarga
-                    if st.session_state.get('hist_pegado_rows') and st.session_state.get('hist_pegado_fecha') == fecha_hist:
+                    if st.session_state.get('hist_pegado_rows') and st.session_state.get('hist_pegado_fecha_result') == fecha_hist:
                         rows_hist = st.session_state['hist_pegado_rows']
 
                         # Agrupar por orden (puede haber varias órdenes en el mismo día)
