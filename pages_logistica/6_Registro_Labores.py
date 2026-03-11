@@ -3,9 +3,108 @@ import pandas as pd
 from datetime import date, datetime
 import sys
 import os
+import io
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.db_connection import conectar_logistica, cached_tarifas
+
+
+# ── PDF pegado de guías ────────────────────────────────────────────────────────
+def generar_pdf_pegado(data: dict) -> bytes:
+    """
+    Genera el PDF de un registro de pegado de guías.
+    data keys: fecha, orden, filas (list of dicts con codigo/nombre/inicial/final/cantidad),
+               tarifa, consecutivos
+    """
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter,
+                            leftMargin=2*cm, rightMargin=2*cm,
+                            topMargin=2*cm, bottomMargin=2*cm)
+
+    styles = getSampleStyleSheet()
+    titulo_style = ParagraphStyle('titulo', parent=styles['Heading1'],
+                                  fontSize=16, spaceAfter=4)
+    sub_style = ParagraphStyle('sub', parent=styles['Normal'],
+                               fontSize=10, spaceAfter=2)
+
+    story = []
+
+    # ── Encabezado ────────────────────────────────────────────────────────────
+    story.append(Paragraph("Planilla Pegado de Guías", titulo_style))
+
+    fecha_str = data['fecha'].strftime('%d/%m/%Y') if hasattr(data['fecha'], 'strftime') else str(data['fecha'])
+    consecutivos_str = ', '.join([f'#{c}' for c in data['consecutivos']])
+
+    story.append(Paragraph(f"<b>Fecha:</b> {fecha_str}", sub_style))
+    story.append(Paragraph(f"<b>Orden:</b> {data['orden']}", sub_style))
+    story.append(Paragraph(f"<b>Consecutivos:</b> {consecutivos_str}", sub_style))
+    story.append(Paragraph(f"<b>Generado:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}", sub_style))
+    story.append(Spacer(1, 0.5*cm))
+
+    # ── Tabla ─────────────────────────────────────────────────────────────────
+    tarifa = data['tarifa']
+    filas = data['filas']
+
+    encabezado = ['Código', 'Nombre', 'Guía Inicial', 'Guía Final', 'Cant. Guías', 'Precio Unit.', 'Total']
+    rows = [encabezado]
+    total_guias = 0
+
+    for f in filas:
+        cant = f['cantidad']
+        total = cant * tarifa
+        total_guias += cant
+        rows.append([
+            f['codigo'],
+            f['nombre'],
+            f"{f['inicial']:,}",
+            f"{f['final']:,}",
+            f"{cant:,}",
+            f"${tarifa:,.4f}",
+            f"${total:,.0f}",
+        ])
+
+    # Fila de totales
+    rows.append([
+        '', 'TOTAL', '', '',
+        f"{total_guias:,}",
+        '',
+        f"${total_guias * tarifa:,.0f}",
+    ])
+
+    col_widths = [2*cm, 5.5*cm, 2.5*cm, 2.5*cm, 2.5*cm, 2.8*cm, 2.8*cm]
+    tabla = Table(rows, colWidths=col_widths, repeatRows=1)
+    tabla.setStyle(TableStyle([
+        # Encabezado
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2c5f8a')),
+        ('TEXTCOLOR',  (0, 0), (-1, 0), colors.white),
+        ('FONTNAME',   (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE',   (0, 0), (-1, 0), 9),
+        ('ALIGN',      (0, 0), (-1, 0), 'CENTER'),
+        # Datos
+        ('FONTSIZE',   (0, 1), (-1, -1), 8.5),
+        ('ALIGN',      (2, 1), (-1, -1), 'RIGHT'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f0f4f8')]),
+        # Fila total
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#e8f0e8')),
+        ('FONTNAME',   (0, -1), (-1, -1), 'Helvetica-Bold'),
+        # Bordes
+        ('GRID',       (0, 0), (-1, -1), 0.4, colors.HexColor('#cccccc')),
+        ('LINEBELOW',  (0, 0), (-1, 0), 1.5, colors.HexColor('#2c5f8a')),
+        ('LINEABOVE',  (0, -1), (-1, -1), 1.5, colors.HexColor('#888888')),
+        ('VALIGN',     (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+
+    story.append(tabla)
+    doc.build(story)
+    return buf.getvalue()
 
 
 def convertir_horas_a_decimal(tiempo_str):
@@ -738,7 +837,11 @@ with tab2:
                                 and fin_val >= ini_val and cant > 0):
                             filas_validas_peg.append({
                                 'personal_id': personal_dict_lab[cod_in]['id'],
-                                'cantidad': cant
+                                'codigo': cod_in,
+                                'nombre': personal_dict_lab[cod_in]['nombre_completo'],
+                                'inicial': ini_val,
+                                'final': fin_val,
+                                'cantidad': cant,
                             })
 
                     st.markdown("---")
@@ -776,6 +879,16 @@ with tab2:
                                 cur_ins.close()
 
                                 st.session_state.ultimo_consecutivo_labor = consecutivos_peg[-1]
+
+                                # Guardar datos para PDF antes de limpiar
+                                st.session_state['pendiente_pdf_pegado'] = {
+                                    'fecha': fecha_pegado,
+                                    'orden': orden_pegado_sel,
+                                    'filas': list(filas_validas_peg),
+                                    'tarifa': tarifa_pegado,
+                                    'consecutivos': consecutivos_peg,
+                                }
+
                                 for rid in st.session_state.lab_pegado_filas:
                                     for k in [f"lab_peg_codigo_{rid}",
                                               f"lab_peg_inicial_{rid}", f"lab_peg_final_{rid}"]:
@@ -790,6 +903,31 @@ with tab2:
                                 conn.rollback()
                 else:
                     st.info("↑ Haga clic en **➕ Agregar Fila** para comenzar")
+
+                # ── Descarga PDF del último guardado ──────────────────────────
+                if st.session_state.get('pendiente_pdf_pegado'):
+                    pdf_data = st.session_state['pendiente_pdf_pegado']
+                    fecha_str = pdf_data['fecha'].strftime('%Y-%m-%d') if hasattr(pdf_data['fecha'], 'strftime') else str(pdf_data['fecha'])
+                    st.divider()
+                    st.success("✅ Registro guardado — descarga la planilla en PDF:")
+                    col_dl, col_ok = st.columns([2, 1])
+                    with col_dl:
+                        try:
+                            pdf_bytes = generar_pdf_pegado(pdf_data)
+                            st.download_button(
+                                label="📄 Descargar PDF Pegado de Guías",
+                                data=pdf_bytes,
+                                file_name=f"pegado_guias_{fecha_str}.pdf",
+                                mime="application/pdf",
+                                key="dl_pdf_pegado",
+                                type="primary",
+                            )
+                        except Exception as e_pdf:
+                            st.error(f"Error generando PDF: {e_pdf}")
+                    with col_ok:
+                        if st.button("✓ Cerrar", key="btn_pdf_ok"):
+                            del st.session_state['pendiente_pdf_pegado']
+                            st.rerun()
 
             # =============================================
             # TRANSPORTE COMPLETO: mensajero fijo, filas por fecha/orden
