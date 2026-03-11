@@ -109,6 +109,135 @@ def generar_pdf_pegado(data: dict) -> bytes:
     return buf.getvalue()
 
 
+def generar_pdf_pegado_dia(fecha, rows: list) -> bytes:
+    """
+    PDF unificado de todos los registros de pegado de un día.
+    rows: lista de dicts con codigo, nombre, cantidad, tarifa_unitaria,
+          numero_orden, cliente.
+    Estructura:
+      - Encabezado con fecha y listado de órdenes
+      - Tabla detalle (todos los registros, ordenados por código)
+      - Tabla resumen: totales por código
+    """
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib import colors
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from collections import defaultdict
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter,
+                            leftMargin=2*cm, rightMargin=2*cm,
+                            topMargin=2*cm, bottomMargin=2*cm)
+
+    styles = getSampleStyleSheet()
+    titulo_style = ParagraphStyle('titulo', parent=styles['Heading1'], fontSize=15, spaceAfter=4)
+    sub_style    = ParagraphStyle('sub',    parent=styles['Normal'],   fontSize=9,  spaceAfter=2)
+    sec_style    = ParagraphStyle('sec',    parent=styles['Heading2'], fontSize=11, spaceBefore=10, spaceAfter=4)
+
+    fecha_str = fecha.strftime('%d/%m/%Y') if hasattr(fecha, 'strftime') else str(fecha)
+    story = []
+
+    # ── Encabezado ────────────────────────────────────────────────────────────
+    story.append(Paragraph("Planilla Diaria — Pegado de Guías", titulo_style))
+    story.append(Paragraph(f"<b>Fecha:</b> {fecha_str}", sub_style))
+    story.append(Paragraph(f"<b>Generado:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}", sub_style))
+
+    # Órdenes del día
+    ordenes_unicas = sorted({f"{r['numero_orden']} - {r['cliente']}" for r in rows})
+    story.append(Paragraph(f"<b>Órdenes:</b> {', '.join(ordenes_unicas)}", sub_style))
+    story.append(Spacer(1, 0.4*cm))
+
+    # ── Tabla detalle ─────────────────────────────────────────────────────────
+    story.append(Paragraph("Detalle por trabajador", sec_style))
+
+    enc_det = ['Código', 'Nombre', 'Orden', 'Cant. Guías', 'Precio Unit.', 'Total']
+    rows_det = [enc_det]
+    for r in sorted(rows, key=lambda x: x['codigo']):
+        tarifa = float(r['tarifa_unitaria'])
+        cant   = r['cantidad']
+        rows_det.append([
+            r['codigo'],
+            r['nombre'],
+            str(r['numero_orden']),
+            f"{cant:,}",
+            f"${tarifa:,.4f}",
+            f"${cant * tarifa:,.0f}",
+        ])
+
+    col_w_det = [2*cm, 5.5*cm, 3*cm, 2.8*cm, 2.8*cm, 2.8*cm]
+    t_det = Table(rows_det, colWidths=col_w_det, repeatRows=1)
+    t_det.setStyle(TableStyle([
+        ('BACKGROUND',     (0, 0), (-1, 0),  colors.HexColor('#2c5f8a')),
+        ('TEXTCOLOR',      (0, 0), (-1, 0),  colors.white),
+        ('FONTNAME',       (0, 0), (-1, 0),  'Helvetica-Bold'),
+        ('FONTSIZE',       (0, 0), (-1, 0),  9),
+        ('ALIGN',          (0, 0), (-1, 0),  'CENTER'),
+        ('FONTSIZE',       (0, 1), (-1, -1), 8),
+        ('ALIGN',          (3, 1), (-1, -1), 'RIGHT'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f0f4f8')]),
+        ('GRID',           (0, 0), (-1, -1), 0.4, colors.HexColor('#cccccc')),
+        ('LINEBELOW',      (0, 0), (-1, 0),  1.5, colors.HexColor('#2c5f8a')),
+        ('VALIGN',         (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING',     (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING',  (0, 0), (-1, -1), 4),
+    ]))
+    story.append(t_det)
+    story.append(Spacer(1, 0.6*cm))
+
+    # ── Tabla resumen por código ───────────────────────────────────────────────
+    story.append(Paragraph("Totales por código", sec_style))
+
+    totales = defaultdict(lambda: {'nombre': '', 'cantidad': 0, 'valor': 0.0})
+    for r in rows:
+        cod = r['codigo']
+        totales[cod]['nombre']   = r['nombre']
+        totales[cod]['cantidad'] += r['cantidad']
+        totales[cod]['valor']    += r['cantidad'] * float(r['tarifa_unitaria'])
+
+    enc_res = ['Código', 'Nombre', 'Total Guías', 'Total $']
+    rows_res = [enc_res]
+    gran_guias = 0
+    gran_valor = 0.0
+    for cod, dat in sorted(totales.items()):
+        rows_res.append([
+            cod,
+            dat['nombre'],
+            f"{dat['cantidad']:,}",
+            f"${dat['valor']:,.0f}",
+        ])
+        gran_guias += dat['cantidad']
+        gran_valor += dat['valor']
+
+    rows_res.append(['', 'TOTAL', f"{gran_guias:,}", f"${gran_valor:,.0f}"])
+
+    col_w_res = [2*cm, 6*cm, 3.5*cm, 3.5*cm]
+    t_res = Table(rows_res, colWidths=col_w_res, repeatRows=1)
+    t_res.setStyle(TableStyle([
+        ('BACKGROUND',     (0, 0),  (-1, 0),  colors.HexColor('#2c5f8a')),
+        ('TEXTCOLOR',      (0, 0),  (-1, 0),  colors.white),
+        ('FONTNAME',       (0, 0),  (-1, 0),  'Helvetica-Bold'),
+        ('FONTSIZE',       (0, 0),  (-1, 0),  9),
+        ('ALIGN',          (0, 0),  (-1, 0),  'CENTER'),
+        ('FONTSIZE',       (0, 1),  (-1, -1), 8.5),
+        ('ALIGN',          (2, 1),  (-1, -1), 'RIGHT'),
+        ('ROWBACKGROUNDS', (0, 1),  (-1, -2), [colors.white, colors.HexColor('#f0f4f8')]),
+        ('BACKGROUND',     (0, -1), (-1, -1), colors.HexColor('#e8f0e8')),
+        ('FONTNAME',       (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('GRID',           (0, 0),  (-1, -1), 0.4, colors.HexColor('#cccccc')),
+        ('LINEBELOW',      (0, 0),  (-1, 0),  1.5, colors.HexColor('#2c5f8a')),
+        ('LINEABOVE',      (0, -1), (-1, -1), 1.5, colors.HexColor('#888888')),
+        ('VALIGN',         (0, 0),  (-1, -1), 'MIDDLE'),
+        ('TOPPADDING',     (0, 0),  (-1, -1), 4),
+        ('BOTTOMPADDING',  (0, 0),  (-1, -1), 4),
+    ]))
+    story.append(t_res)
+
+    doc.build(story)
+    return buf.getvalue()
+
+
 def convertir_horas_a_decimal(tiempo_str):
     """Convierte formato HH:MM a decimal (ej: '2:45' -> 2.75)"""
     try:
@@ -972,54 +1101,36 @@ with tab2:
                             except Exception as e_h:
                                 st.error(f"Error consultando: {e_h}")
 
-                    # Mostrar resultados y botón de descarga
+                    # Mostrar resultados y botón PDF unificado
                     if st.session_state.get('hist_pegado_rows') and st.session_state.get('hist_pegado_fecha_result') == fecha_hist:
                         rows_hist = st.session_state['hist_pegado_rows']
 
-                        # Agrupar por orden (puede haber varias órdenes en el mismo día)
                         from collections import defaultdict
+
+                        # Resumen por orden para la pantalla
                         grupos = defaultdict(list)
                         for r in rows_hist:
-                            orden_lbl = f"{r['numero_orden']} - {r['cliente']}"
-                            grupos[orden_lbl].append(r)
+                            grupos[f"{r['numero_orden']} - {r['cliente']}"].append(r)
 
                         for orden_lbl, filas_g in grupos.items():
                             tarifa_g = float(filas_g[0]['tarifa_unitaria'])
                             total_g = sum(f['cantidad'] for f in filas_g)
+                            st.markdown(f"**{orden_lbl}** — {len(filas_g)} trabajador(es) — {total_g:,} guías — ${total_g * tarifa_g:,.0f}")
 
-                            st.markdown(f"**Orden:** {orden_lbl} — {len(filas_g)} trabajador(es) — {total_g:,} guías — ${total_g * tarifa_g:,.0f}")
-
-                            # Construir data para generar PDF (sin inicial/final, no se guarda en BD)
-                            filas_pdf = [
-                                {
-                                    'codigo': f['codigo'],
-                                    'nombre': f['nombre'],
-                                    'inicial': '—',
-                                    'final': '—',
-                                    'cantidad': f['cantidad'],
-                                }
-                                for f in filas_g
-                            ]
-                            hist_pdf_data = {
-                                'fecha': fecha_hist,
-                                'orden': orden_lbl,
-                                'filas': filas_pdf,
-                                'tarifa': tarifa_g,
-                                'consecutivos': [f['consecutivo'] for f in filas_g],
-                            }
-                            try:
-                                pdf_bytes_h = generar_pdf_pegado(hist_pdf_data)
-                                orden_slug = str(filas_g[0]['numero_orden'])
-                                fecha_slug = fecha_hist.strftime('%Y-%m-%d')
-                                st.download_button(
-                                    label=f"📄 Descargar PDF — Orden {orden_slug}",
-                                    data=pdf_bytes_h,
-                                    file_name=f"pegado_guias_{fecha_slug}_orden{orden_slug}.pdf",
-                                    mime="application/pdf",
-                                    key=f"dl_hist_{fecha_slug}_{orden_slug}",
-                                )
-                            except Exception as e_pdf_h:
-                                st.error(f"Error generando PDF: {e_pdf_h}")
+                        # Un solo PDF con todas las órdenes del día
+                        try:
+                            fecha_slug = fecha_hist.strftime('%Y-%m-%d')
+                            pdf_bytes_dia = generar_pdf_pegado_dia(fecha_hist, rows_hist)
+                            st.download_button(
+                                label="📄 Descargar PDF completo del día",
+                                data=pdf_bytes_dia,
+                                file_name=f"pegado_guias_{fecha_slug}.pdf",
+                                mime="application/pdf",
+                                key=f"dl_hist_dia_{fecha_slug}",
+                                type="primary",
+                            )
+                        except Exception as e_pdf_h:
+                            st.error(f"Error generando PDF: {e_pdf_h}")
 
             # =============================================
             # TRANSPORTE COMPLETO: mensajero fijo, filas por fecha/orden
