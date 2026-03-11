@@ -946,7 +946,7 @@ with tab2:
                                 cur_h.execute("""
                                     SELECT
                                         p.codigo,
-                                        p.nombre AS nombre,
+                                        p.nombre_completo AS nombre,
                                         rl.cantidad,
                                         rl.tarifa_unitaria,
                                         rl.id AS consecutivo,
