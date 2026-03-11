@@ -14,39 +14,37 @@ conn = conectar_logistica()
 if not conn:
     st.stop()
 
-# Agregar columnas liquidado si no existen (solo falla silenciosamente si ya existen)
-for _sql_liq in [
-    # columna de control usada por facturación (NULL = pendiente, valor = id de facturas_recibidas)
-    "ALTER TABLE gestiones_mensajero ADD COLUMN facturado_liq INT NULL DEFAULT NULL",
-    # columnas de control para alistamiento (ya existen en schema, falla silenciosamente si es así)
-    "ALTER TABLE registro_horas ADD COLUMN liquidado TINYINT(1) NOT NULL DEFAULT 0",
-    "ALTER TABLE registro_labores ADD COLUMN liquidado TINYINT(1) NOT NULL DEFAULT 0",
-    "ALTER TABLE facturas_recibidas MODIFY COLUMN tipo VARCHAR(50) NOT NULL DEFAULT 'otros'",
-]:
+# Migraciones de schema: correr UNA sola vez por sesión (no en cada rerun)
+if 'facturacion_schema_ok' not in st.session_state:
+    for _sql_liq in [
+        "ALTER TABLE gestiones_mensajero ADD COLUMN facturado_liq INT NULL DEFAULT NULL",
+        "ALTER TABLE registro_horas ADD COLUMN liquidado TINYINT(1) NOT NULL DEFAULT 0",
+        "ALTER TABLE registro_labores ADD COLUMN liquidado TINYINT(1) NOT NULL DEFAULT 0",
+        "ALTER TABLE facturas_recibidas MODIFY COLUMN tipo VARCHAR(50) NOT NULL DEFAULT 'otros'",
+    ]:
+        try:
+            _c = conn.cursor()
+            _c.execute(_sql_liq)
+            conn.commit()
+            _c.close()
+        except Exception:
+            conn.rollback()
+
     try:
-        _c = conn.cursor()
-        _c.execute(_sql_liq)
+        _c_fix = conn.cursor()
+        _c_fix.execute("""
+            UPDATE gestiones_mensajero gm
+            JOIN facturas_recibidas fr ON gm.facturado_liq = fr.id
+            JOIN personal p ON fr.personal_id = p.id
+            SET gm.facturado_liq = NULL
+            WHERE CAST(gm.cod_mensajero AS UNSIGNED) != CAST(p.codigo AS UNSIGNED)
+        """)
         conn.commit()
-        _c.close()
+        _c_fix.close()
     except Exception:
         conn.rollback()
 
-# Corregir facturado_liq mal asignado: si un registro de gestiones_mensajero tiene facturado_liq
-# apuntando a una liquidación de OTRO mensajero (error del UPDATE anterior sin filtro cod_mensajero),
-# lo limpiamos poniendo facturado_liq = NULL.
-try:
-    _c_fix = conn.cursor()
-    _c_fix.execute("""
-        UPDATE gestiones_mensajero gm
-        JOIN facturas_recibidas fr ON gm.facturado_liq = fr.id
-        JOIN personal p ON fr.personal_id = p.id
-        SET gm.facturado_liq = NULL
-        WHERE CAST(gm.cod_mensajero AS UNSIGNED) != CAST(p.codigo AS UNSIGNED)
-    """)
-    conn.commit()
-    _c_fix.close()
-except Exception:
-    conn.rollback()
+    st.session_state['facturacion_schema_ok'] = True
 
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "📄 Facturas Emitidas (Clientes)",

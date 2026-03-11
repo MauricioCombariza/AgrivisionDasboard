@@ -5,7 +5,7 @@ import sys
 import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.db_connection import conectar_logistica
+from utils.db_connection import conectar_logistica, cached_tarifas
 
 
 def convertir_horas_a_decimal(tiempo_str):
@@ -51,47 +51,30 @@ def calcular_subsidio_transporte(conn, personal_id: int, fecha) -> dict:
     """, (personal_id, fecha))
     subsidio_existente = cursor.fetchone()
 
-    # 2. Sumar horas de ALISTAMIENTO (sin prefijo [ADMIN] en observaciones)
+    # 2. Sumar horas de alistamiento y admin en una sola query
     cursor.execute("""
-        SELECT COALESCE(SUM(horas_trabajadas), 0) as horas_alistamiento
+        SELECT
+            COALESCE(SUM(CASE WHEN observaciones IS NULL OR observaciones NOT LIKE '[ADMIN]%%'
+                              THEN horas_trabajadas ELSE 0 END), 0) AS horas_alistamiento,
+            COALESCE(SUM(CASE WHEN observaciones LIKE '[ADMIN]%%'
+                              THEN horas_trabajadas ELSE 0 END), 0) AS horas_admin
         FROM registro_horas
         WHERE personal_id = %s AND fecha = %s
-          AND (observaciones IS NULL OR observaciones NOT LIKE '[ADMIN]%%')
     """, (personal_id, fecha))
-    resultado_alist = cursor.fetchone()
-    horas_alistamiento = float(resultado_alist['horas_alistamiento']) if resultado_alist else 0.0
+    resultado = cursor.fetchone()
+    horas_alistamiento = float(resultado['horas_alistamiento']) if resultado else 0.0
+    horas_admin = float(resultado['horas_admin']) if resultado else 0.0
+    cursor.close()
 
-    # 3. Sumar horas ADMINISTRATIVAS (observaciones con prefijo [ADMIN])
-    cursor.execute("""
-        SELECT COALESCE(SUM(horas_trabajadas), 0) as horas_admin
-        FROM registro_horas
-        WHERE personal_id = %s AND fecha = %s
-          AND observaciones LIKE '[ADMIN]%%'
-    """, (personal_id, fecha))
-    resultado_admin = cursor.fetchone()
-    horas_admin = float(resultado_admin['horas_admin']) if resultado_admin else 0.0
-
-    # 4. Total = Alistamiento + Administrativas
+    # 3. Total y tipo de subsidio
     horas_totales = horas_alistamiento + horas_admin
-
-    # 3. Determinar tipo de subsidio
     if horas_totales >= 5.0:
         tipo_subsidio = 'transporte_completo'
     else:
         tipo_subsidio = 'medio_transporte'
 
-    # 4. Obtener tarifa vigente
-    cursor.execute("""
-        SELECT tarifa FROM tarifas_servicios
-        WHERE tipo_servicio = %s
-          AND activo = TRUE
-        ORDER BY vigencia_desde DESC
-        LIMIT 1
-    """, (tipo_subsidio,))
-    tarifa_result = cursor.fetchone()
-    tarifa = float(tarifa_result['tarifa']) if tarifa_result else 0.0
-
-    cursor.close()
+    # 4. Tarifa vigente — cacheada (no varía por persona/fecha)
+    tarifa = cached_tarifas(tipo_subsidio)
 
     return {
         'horas_totales': horas_totales,
@@ -249,20 +232,23 @@ conn = conectar_logistica()
 if not conn:
     st.stop()
 
-# Asegurar tarifas de subsidio de transporte en $8.333
-try:
-    cursor_init = conn.cursor()
-    cursor_init.execute("""
-        UPDATE tarifas_servicios
-        SET tarifa = 8333
-        WHERE tipo_servicio IN ('transporte_completo', 'medio_transporte')
-          AND activo = TRUE AND tarifa != 8333
-    """)
-    if cursor_init.rowcount > 0:
-        conn.commit()
-    cursor_init.close()
-except Exception:
-    pass
+# Asegurar tarifas de subsidio — solo una vez por sesión
+if 'labores_tarifas_ok' not in st.session_state:
+    try:
+        cursor_init = conn.cursor()
+        cursor_init.execute("""
+            UPDATE tarifas_servicios
+            SET tarifa = 8333
+            WHERE tipo_servicio IN ('transporte_completo', 'medio_transporte')
+              AND activo = TRUE AND tarifa != 8333
+        """)
+        if cursor_init.rowcount > 0:
+            conn.commit()
+            cached_tarifas.clear()  # Invalidar caché si cambió la tarifa
+        cursor_init.close()
+    except Exception:
+        pass
+    st.session_state['labores_tarifas_ok'] = True
 
 # Inicializar contadores de formulario en session_state
 if 'form_horas_counter' not in st.session_state:

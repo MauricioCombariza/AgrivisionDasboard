@@ -26,13 +26,8 @@ DB_CONFIG_LOGISTICA = {
 def get_connection(database="imile"):
     """
     Obtiene una conexión fresca a la base de datos MySQL.
-    NO usar con @st.cache_resource ya que las conexiones MySQL expiran.
-
-    Args:
-        database: "imile" o "logistica"
-
-    Returns:
-        mysql.connector.connection: Objeto de conexión a la base de datos o None si hay error.
+    Usar para escrituras (INSERT/UPDATE/DELETE).
+    Para lecturas repetidas, usar las funciones cached_* de este módulo.
     """
     config = DB_CONFIG_LOGISTICA if database == "logistica" else DB_CONFIG_IMILE
     try:
@@ -41,6 +36,84 @@ def get_connection(database="imile"):
     except mysql.connector.Error as err:
         st.error(f"Error al conectar a la base de datos {database}: {err}")
         return None
+
+
+# ── Conexiones cacheadas por sesión (evitan reconectar en cada rerun) ──────────
+
+@st.cache_resource(show_spinner=False)
+def _pool_logistica():
+    """Pool de conexiones para logistica. Una por proceso Streamlit."""
+    return mysql.connector.connect(**DB_CONFIG_LOGISTICA)
+
+@st.cache_resource(show_spinner=False)
+def _pool_imile():
+    """Pool de conexiones para imile. Una por proceso Streamlit."""
+    return mysql.connector.connect(**DB_CONFIG_IMILE)
+
+def get_cached_connection(database="logistica"):
+    """
+    Devuelve la conexión cacheada, reconectando si expiró.
+    Usar solo para LECTURAS dentro de páginas con muchos reruns.
+    Para escrituras, seguir usando get_connection() para conexiones frescas.
+    """
+    conn = _pool_logistica() if database == "logistica" else _pool_imile()
+    try:
+        conn.ping(reconnect=True, attempts=3, delay=0.5)
+    except Exception:
+        # Si ping falla, limpiar caché y crear nueva
+        if database == "logistica":
+            _pool_logistica.clear()
+            conn = _pool_logistica()
+        else:
+            _pool_imile.clear()
+            conn = _pool_imile()
+    return conn
+
+
+# ── Queries de lectura más frecuentes con caché ────────────────────────────────
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_personal() -> pd.DataFrame:
+    """Lista de personal activo. Refresca cada 5 min."""
+    conn = get_connection("logistica")
+    if not conn:
+        return pd.DataFrame()
+    try:
+        df = pd.read_sql("SELECT id, nombre, codigo, cargo FROM personal WHERE activo = TRUE ORDER BY nombre", conn)
+        return df
+    finally:
+        conn.close()
+
+@st.cache_data(ttl=600, show_spinner=False)
+def cached_clientes() -> pd.DataFrame:
+    """Lista de clientes activos. Refresca cada 10 min."""
+    conn = get_connection("logistica")
+    if not conn:
+        return pd.DataFrame()
+    try:
+        df = pd.read_sql("SELECT id, nombre_empresa FROM clientes WHERE activo = TRUE ORDER BY nombre_empresa", conn)
+        return df
+    finally:
+        conn.close()
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_tarifas(tipo_servicio: str) -> float:
+    """Tarifa vigente para un tipo de servicio. Refresca cada hora."""
+    conn = get_connection("logistica")
+    if not conn:
+        return 0.0
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT tarifa FROM tarifas_servicios
+            WHERE tipo_servicio = %s AND activo = TRUE
+            ORDER BY vigencia_desde DESC LIMIT 1
+        """, (tipo_servicio,))
+        row = cursor.fetchone()
+        cursor.close()
+        return float(row['tarifa']) if row else 0.0
+    finally:
+        conn.close()
 
 def conectar_bd():
     """
