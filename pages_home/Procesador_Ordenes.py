@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import os
 from dotenv import load_dotenv
+from sqlalchemy import create_engine as sa_create_engine
 
 load_dotenv()
 from pathlib import Path
@@ -37,10 +38,33 @@ def obtener_conexion():
 
     return st.session_state.db_connection
 
+BASES_WEB_URL = "mysql+mysqlconnector://servilla_remoto:Servilla123@186.180.15.66:12539/bases_web"
+
 def clasificar_destino(ciudad):
     """Clasifica destino como local si contiene 'bog', sino nacional"""
     ciudad = str(ciudad).lower().strip()
     return 'local' if 'bog' in ciudad else 'nacional'
+
+@st.cache_resource
+def get_bases_web_engine():
+    """Crea engine para bases_web (cached a nivel de sesión)"""
+    return sa_create_engine(BASES_WEB_URL, pool_pre_ping=True)
+
+def cargar_histo_desde_bd(orden_minima=0):
+    """Carga datos de la tabla histo directamente desde bases_web"""
+    try:
+        engine = get_bases_web_engine()
+        query = f"""
+            SELECT orden, f_emi, no_entidad, ciudad1, courrier,
+                   retorno, ret_esc, serial
+            FROM histo
+            WHERE CAST(orden AS SIGNED) >= {int(orden_minima)}
+            ORDER BY CAST(orden AS SIGNED) DESC
+        """
+        df = pd.read_sql(query, engine)
+        return df, None
+    except Exception as e:
+        return None, str(e)
 
 def verificar_julia():
     """Verifica si Julia está instalado"""
@@ -113,11 +137,10 @@ def procesar_con_julia(ruta_archivo, orden_minima):
     except Exception as e:
         return None, f"Error ejecutando Julia: {str(e)}"
 
-def procesar_archivo_historico(ruta_archivo, orden_minima):
-    """Procesa el archivo histórico usando numpy para máxima eficiencia"""
+def procesar_dataframe_historico(df, orden_minima):
+    """Procesa un DataFrame histórico (puede venir de CSV o BD)"""
     try:
-        # Leer archivo
-        df = pd.read_csv(ruta_archivo)
+        df = df.copy()
 
         # Pre-procesamiento de tipos de datos
         df['orden'] = pd.to_numeric(df['orden'], errors='coerce').fillna(0).astype(int)
@@ -130,17 +153,16 @@ def procesar_archivo_historico(ruta_archivo, orden_minima):
         if 'courrier' in df_filtrado.columns:
             df_filtrado = df_filtrado[~df_filtrado['courrier'].fillna('').str.lower().str.strip().isin(couriers_excluidos)]
 
-        # Conversión de fecha
+        # Conversión de fecha (soporta formato '2024.01.15' de bases_web y otros)
         df_filtrado['f_emi'] = pd.to_datetime(df_filtrado['f_emi'], errors='coerce')
 
         # Método eficiente con numpy: crear columnas de conteo condicional
-        # Si ciudad contiene 'bog' o está vacío, es local (1), de lo contrario 0
         es_local = df_filtrado['ciudad1'].fillna('').str.contains('bog', case=False, na=False) | df_filtrado['ciudad1'].isna()
 
         df_filtrado['local'] = np.where(es_local, 1, 0)
         df_filtrado['nacional'] = np.where(~es_local, 1, 0)
 
-        # Agrupación y suma directa (mucho más rápido que pivot)
+        # Agrupación y suma directa
         df_final = df_filtrado.groupby('orden').agg(
             fecha_recepcion=('f_emi', 'first'),
             nombre_cliente=('no_entidad', 'first'),
@@ -152,14 +174,20 @@ def procesar_archivo_historico(ruta_archivo, orden_minima):
         df_final['tipo_servicio'] = 'sobre'
         df_final['fecha_recepcion'] = pd.to_datetime(df_final['fecha_recepcion']).dt.date
 
-        # Convertir cantidades a int
         df_final['cantidad_local'] = df_final['cantidad_local'].astype(int)
         df_final['cantidad_nacional'] = df_final['cantidad_nacional'].astype(int)
 
-        # Reordenar columnas
         df_final = df_final[['orden', 'fecha_recepcion', 'nombre_cliente', 'tipo_servicio', 'cantidad_local', 'cantidad_nacional']]
 
         return df_final, None
+    except Exception as e:
+        return None, str(e)
+
+def procesar_archivo_historico(ruta_archivo, orden_minima):
+    """Procesa el archivo histórico desde CSV"""
+    try:
+        df = pd.read_csv(ruta_archivo)
+        return procesar_dataframe_historico(df, orden_minima)
     except Exception as e:
         return None, str(e)
 
@@ -242,13 +270,24 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 with tab1:
     st.subheader("Procesamiento de Archivo Histórico")
 
+    fuente_datos = st.radio(
+        "Fuente de datos",
+        ["🗄️ Base de Datos (bases_web)", "📄 Archivo CSV"],
+        index=0,
+        horizontal=True
+    )
+
     col1, col2 = st.columns(2)
 
     with col1:
-        ruta_archivo = st.text_input(
-            "Ruta del Archivo CSV",
-            value="/mnt/c/Users/mcomb/Desktop/Carvajal/python/basesHisto.csv"
-        )
+        if fuente_datos == "📄 Archivo CSV":
+            ruta_archivo = st.text_input(
+                "Ruta del Archivo CSV",
+                value="/mnt/c/Users/mcomb/Desktop/Carvajal/python/basesHisto.csv"
+            )
+        else:
+            st.info("Se consultará directamente la tabla `histo` en bases_web")
+            ruta_archivo = None
 
     with col2:
         orden_minima = st.number_input(
@@ -289,7 +328,57 @@ with tab1:
         # Determinar qué motor usar
         usar_julia = motor == "Julia (Alto Rendimiento)" and julia_disponible
 
-        if usar_julia:
+        if fuente_datos == "🗄️ Base de Datos (bases_web)":
+            st.info("⚙️ Cargando datos desde bases_web...")
+            with st.spinner("Consultando base de datos remota..."):
+                df_raw, error_bd = cargar_histo_desde_bd(orden_minima)
+
+            if error_bd:
+                st.error(f"❌ Error al conectar con bases_web: {error_bd}")
+            else:
+                st.success(f"✅ {len(df_raw):,} registros cargados desde bases_web")
+
+                with st.spinner("Procesando datos..."):
+                    df_procesado, error_proc = procesar_dataframe_historico(df_raw, orden_minima)
+
+                if error_proc:
+                    st.error(f"❌ Error al procesar: {error_proc}")
+                else:
+                    st.success(f"✅ Archivo procesado exitosamente: {len(df_procesado)} registros encontrados")
+                    st.info("ℹ️ Se excluyeron automáticamente los couriers LECTA y PRINDEL")
+
+                    st.session_state['df_procesado'] = df_procesado
+
+                    keys_to_clear = ['df_normalizado', 'ordenes_existentes_set', 'ordenes_existentes_list',
+                                     'df_nuevas', 'df_duplicadas']
+                    for key in keys_to_clear:
+                        if key in st.session_state:
+                            del st.session_state[key]
+
+                    st.session_state['mapeos_aplicados'] = False
+                    st.session_state['force_reprocess'] = False
+
+                    st.markdown("### 👀 Vista Previa del Procesamiento")
+                    st.dataframe(df_procesado.tail(50), use_container_width=True)
+
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Total Órdenes", len(df_procesado))
+                    with col2:
+                        total_items = df_procesado['cantidad_local'].sum() + df_procesado['cantidad_nacional'].sum()
+                        st.metric("Total Items", f"{total_items:,}")
+                    with col3:
+                        st.metric("Items Locales", f"{df_procesado['cantidad_local'].sum():,}")
+                    with col4:
+                        st.metric("Items Nacionales", f"{df_procesado['cantidad_nacional'].sum():,}")
+
+                    st.markdown("### 🏢 Clientes Identificados")
+                    clientes_unicos = df_procesado['nombre_cliente'].unique()
+                    st.info(f"Se encontraron **{len(clientes_unicos)}** nombres de clientes diferentes")
+                    with st.expander("Ver lista completa de clientes"):
+                        st.write(sorted(clientes_unicos))
+
+        elif usar_julia:
             # Usar Julia para procesamiento
             st.info("⚙️ Usando motor Julia con multithreading...")
             output_container = st.empty()
@@ -1026,19 +1115,48 @@ with tab5:
             s = s[:-2]
         return s
 
-    ruta_base = st.text_input(
-        "Ruta del archivo CSV base",
-        value="/mnt/c/Users/mcomb/Desktop/Carvajal/python/basesHisto.csv",
-        key="ruta_csv_gestiones"
+    fuente_gestiones = st.radio(
+        "Fuente de datos para gestiones",
+        ["🗄️ Base de Datos (bases_web)", "📄 Archivo CSV"],
+        index=0,
+        horizontal=True,
+        key="fuente_gestiones"
     )
 
+    if fuente_gestiones == "📄 Archivo CSV":
+        ruta_base = st.text_input(
+            "Ruta del archivo CSV base",
+            value="/mnt/c/Users/mcomb/Desktop/Carvajal/python/basesHisto.csv",
+            key="ruta_csv_gestiones"
+        )
+    else:
+        ruta_base = None
+        orden_min_gestiones = st.number_input(
+            "Orden Mínima (dejar en 0 para todas las órdenes activas)",
+            min_value=0,
+            value=0,
+            step=1,
+            key="orden_min_gestiones",
+            help="Filtra registros de histo con orden >= este valor"
+        )
+        st.info("Se consultará directamente la tabla `histo` en bases_web")
+
     if st.button("🚀 Procesar y Actualizar Gestiones", type="primary", key="btn_procesar_gestiones"):
-        if not os.path.exists(ruta_base):
+        if fuente_gestiones == "📄 Archivo CSV" and not os.path.exists(ruta_base):
             st.error(f"No se encontró el archivo: {ruta_base}")
         else:
             try:
-                with st.spinner("Leyendo archivo CSV (puede tardar por el tamaño)..."):
-                    df_gest = pd.read_csv(ruta_base, low_memory=False, encoding='latin1', dtype=str)
+                if fuente_gestiones == "🗄️ Base de Datos (bases_web)":
+                    with st.spinner("Cargando datos desde bases_web..."):
+                        df_gest, error_bd_gest = cargar_histo_desde_bd(orden_min_gestiones)
+                    if error_bd_gest:
+                        st.error(f"❌ Error al conectar con bases_web: {error_bd_gest}")
+                        st.stop()
+                    df_gest = df_gest.astype(str)
+                    st.success(f"✅ {len(df_gest):,} registros cargados desde bases_web")
+                else:
+                    with st.spinner("Leyendo archivo CSV (puede tardar por el tamaño)..."):
+                        df_gest = pd.read_csv(ruta_base, low_memory=False, encoding='latin1', dtype=str)
 
                 if 'retorno' not in df_gest.columns or 'orden' not in df_gest.columns:
                     st.error("El CSV debe contener las columnas 'retorno' y 'orden'")
