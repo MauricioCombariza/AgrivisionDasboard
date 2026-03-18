@@ -196,7 +196,6 @@ try:
                             ids_planilla = df_busq['id'].tolist()
                             actualizados = 0
                             fusionados = 0
-                            omitidos_prot = 0
                             eliminados_ids = []
 
                             for gestion_id in ids_planilla:
@@ -213,11 +212,6 @@ try:
                                 reg = cursor_upd.fetchone()
 
                                 if not reg or reg['cod_mensajero'] == nuevo_cod_planilla:
-                                    continue
-
-                                # Saltar registros editados manualmente (protegidos)
-                                if reg.get('editado_manualmente'):
-                                    omitidos_prot += 1
                                     continue
 
                                 # Verificar si ya existe un registro con el nuevo mensajero
@@ -268,8 +262,6 @@ try:
                                     msg += f", "
                                 msg += f"{fusionados} registro(s) fusionados"
                             msg += f" a mensajero {nuevo_cod_planilla}"
-                            if omitidos_prot > 0:
-                                msg += f" | {omitidos_prot} omitido(s) por estar protegidos 🔒"
                             st.success(msg)
 
                             st.session_state.planilla_buscada = None
@@ -315,18 +307,14 @@ try:
                             cursor_upd = conn.cursor()
                             ids_planilla = df_busq['id'].tolist()
                             actualizados_precio = 0
-                            omitidos_prot_precio = 0
 
                             for gestion_id in ids_planilla:
                                 cursor_upd.execute(
-                                    "SELECT total_seriales, editado_manualmente FROM gestiones_mensajero WHERE id = %s",
+                                    "SELECT total_seriales FROM gestiones_mensajero WHERE id = %s",
                                     (gestion_id,)
                                 )
                                 res = cursor_upd.fetchone()
                                 if res:
-                                    if res[1]:  # editado_manualmente
-                                        omitidos_prot_precio += 1
-                                        continue
                                     valor_reg = res[0] * nuevo_precio_planilla
                                     cursor_upd.execute("""
                                         UPDATE gestiones_mensajero
@@ -338,8 +326,6 @@ try:
                             conn.commit()
                             cursor_upd.close()
                             msg_precio = f"Planilla {num_planilla}: precio actualizado a ${nuevo_precio_planilla:,.0f} en {actualizados_precio} registro(s)"
-                            if omitidos_prot_precio > 0:
-                                msg_precio += f" | {omitidos_prot_precio} omitido(s) por estar protegidos 🔒"
                             st.success(msg_precio)
                             st.session_state.planilla_buscada = None
                             st.rerun()

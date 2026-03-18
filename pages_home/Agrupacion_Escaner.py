@@ -746,7 +746,17 @@ with tab1:
                     cursor_reg = conn_gest.cursor()
                     insertados = 0
                     actualizados = 0
+                    omitidos_rev = 0
                     errores_reg = []
+
+                    # Cargar planillas revisadas para no sobreescribirlas
+                    try:
+                        _cur_rev2 = conn_gest.cursor()
+                        _cur_rev2.execute("SELECT lot_esc FROM planillas_revisadas")
+                        _planillas_rev_reg = {r[0] for r in _cur_rev2.fetchall()}
+                        _cur_rev2.close()
+                    except Exception:
+                        _planillas_rev_reg = set()
 
                     barra = st.progress(0)
                     total_filas = len(df_gestiones)
@@ -759,6 +769,11 @@ with tab1:
                             cliente = row['no_entidad']
                             cod_men_val = row['cod_men']
 
+                            # Saltar planillas marcadas como revisadas
+                            if lot_esc_val in _planillas_rev_reg:
+                                omitidos_rev += 1
+                                continue
+
                             # Verificar si ya existe
                             cursor_reg.execute("""
                                 SELECT id FROM gestiones_mensajero
@@ -769,18 +784,19 @@ with tab1:
                             existente = cursor_reg.fetchone()
 
                             if existente:
-                                # Actualizar registro existente
+                                # Actualizar registro existente (respetar candado manual)
                                 cursor_reg.execute("""
                                     UPDATE gestiones_mensajero
                                     SET total_seriales = %s, valor_unitario = %s, valor_total = %s
-                                    WHERE id = %s
+                                    WHERE id = %s AND editado_manualmente = 0
                                 """, (
                                     int(row['total_serial']),
                                     float(row['valor_unitario']),
                                     float(row['valor_total']),
                                     existente[0]
                                 ))
-                                actualizados += 1
+                                if cursor_reg.rowcount > 0:
+                                    actualizados += 1
                             else:
                                 # Insertar nuevo registro
                                 m_id = row['mensajero_id'] if pd.notna(row['mensajero_id']) else None
@@ -817,7 +833,10 @@ with tab1:
                     conn_gest.commit()
                     barra.progress(1.0)
 
-                    st.success(f"Registros insertados: {insertados} | Actualizados: {actualizados}")
+                    msg_reg = f"Registros insertados: {insertados} | Actualizados: {actualizados}"
+                    if omitidos_rev > 0:
+                        msg_reg += f" | {omitidos_rev} omitido(s) por planilla revisada 🔒"
+                    st.success(msg_reg)
                     if errores_reg:
                         with st.expander(f"Ver {len(errores_reg)} errores"):
                             for err in errores_reg:
