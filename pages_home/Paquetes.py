@@ -172,23 +172,10 @@ st.dataframe(df_output)
 st.button("Test")
 
 # ——— Botones de exportación ———
-if st.button("Guardar Excel en Descargas"):
-    # Definir la ruta local para guardar el archivo Excel
-    ruta_excel = "/mnt/c/Users/mcomb/Downloads/intermedio.xlsx"  # Asegúrate de que esta ruta exista en tu sistema
-    try:
-        # Guardar el archivo en la ruta
-        df_intermedio.to_excel(ruta_excel, index=False)
-        st.success(f"Archivo guardado en: {ruta_excel}")
-    except Exception as e:
-        st.error(f"Error al guardar el archivo: {e}")
+buf_excel = io.BytesIO()
+df_intermedio.to_excel(buf_excel, index=False)
+st.download_button("📥 Descargar Excel", buf_excel.getvalue(), "intermedio.xlsx",
+                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# Botón para guardar como CSV
-if st.button("Guardar CSV en Descargas"):
-    # Definir la ruta local para guardar el archivo CSV
-    ruta_csv = "/mnt/c/Users/mcomb/Desktop/Carvajal/python/sectorizado.csv"  # Asegúrate de que esta ruta exista en tu sistema
-    try:
-        # Guardar el archivo en la ruta
-        df_output.to_csv(ruta_csv, index=False)
-        st.success(f"Archivo guardado en: {ruta_csv}")
-    except Exception as e:
-        st.error(f"Error al guardar el archivo: {e}")    
+csv_data = df_output.to_csv(index=False).encode("utf-8")
+st.download_button("📥 Descargar CSV", csv_data, "sectorizado.csv", "text/csv")

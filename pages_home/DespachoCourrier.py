@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import io
 import os
 
 # Título de la app
@@ -54,13 +55,12 @@ if uploaded_file:
                 st.write(f"Se encontraron {len(df_filtrado)} registros.")
                 st.dataframe(df_filtrado)
 
-                # Guardar Excel
+                # Descargar Excel
                 if not df_filtrado.empty:
                     filename = f"despacho_{cod_men}_de{fecha_inicio}_a{fecha_fin}.xlsx"
-                    path_descargas = "/mnt/c/Users/mcomb/Downloads"
-                    ruta_final = os.path.join(path_descargas, filename)
-
-                    df_filtrado.to_excel(ruta_final, index=False)
-                    st.success(f"Archivo guardado correctamente en: {ruta_final}")
+                    buf = io.BytesIO()
+                    df_filtrado.to_excel(buf, index=False)
+                    st.download_button("📥 Descargar Excel", buf.getvalue(), filename,
+                                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             except ValueError:
                 st.error("El número del mensajero debe ser numérico.")

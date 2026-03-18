@@ -40,14 +40,11 @@ if uploaded_file is not None:
             # Mostrar los resultados
             if not df_filtrado.empty:
                 
-                # Crear la ruta de guardado
-                ruta_guardado = f"/mnt/c/Users/mcomb/Downloads/planilla_{str(planilla_num)}.xlsx"
-                
-                # Guardar el DataFrame en un archivo Excel
-                with pd.ExcelWriter(ruta_guardado, engine="openpyxl") as writer:
+                buf = io.BytesIO()
+                with pd.ExcelWriter(buf, engine="openpyxl") as writer:
                     df_filtrado.to_excel(writer, index=False, sheet_name="Hoja1")
-
-                st.success(f"Archivo guardado en: {ruta_guardado}")
+                st.download_button("📥 Descargar Excel", buf.getvalue(), f"planilla_{planilla_num}.xlsx",
+                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                 
             else:
                 st.write(f"No se encontraron coincidencias para la planilla: {planilla_num}")

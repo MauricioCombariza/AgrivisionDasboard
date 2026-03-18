@@ -190,14 +190,14 @@ def _df_a_excel(df: pd.DataFrame) -> bytes:
 
 
 # ── Imagen de respaldo cuando el número no tiene WhatsApp ─────────────────────
-_DOWNLOADS_WSL = "/mnt/c/Users/mcomb/Downloads"
+import tempfile as _tempfile
+_DOWNLOADS_WSL = _tempfile.gettempdir()
 
 
 def _crear_imagen_sin_wa(serial: str, numero: str) -> str:
     """
     Genera una imagen PNG que documenta que el número no tiene WhatsApp.
-    Se guarda en la misma ruta que subir_imile_windows.py espera
-    (C:\\Users\\mcomb\\Downloads\\captura_{serial}.png).
+    Se guarda en el directorio temporal del sistema.
     """
     path = os.path.join(_DOWNLOADS_WSL, f"captura_{serial}.png")
 

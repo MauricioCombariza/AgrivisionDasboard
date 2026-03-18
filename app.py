@@ -69,6 +69,7 @@ PAGES_LOGISTICA = [
 
 PAGES_PAQUETES = [
     st.Page("pages_home/Agrupacion_Escaner.py", title="Agrupación Escáner"),
+    st.Page("pages_home/Entregas_Por_Foto.py", title="Entregas por Foto", icon="📷"),
     st.Page("pages_home/BuscarDirecciones.py", title="Buscar Direcciones"),
     st.Page("pages_home/BuscarPaquete.py", title="Buscar Paquete", icon="🔍"),
     st.Page("pages_home/ExcelACSV.py", title="Excel a CSV", icon="📄"),

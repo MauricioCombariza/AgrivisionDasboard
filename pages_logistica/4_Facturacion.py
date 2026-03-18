@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime, date, timedelta
 import sys
 import os
+import io
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.db_connection import conectar_logistica
@@ -122,22 +123,23 @@ with tab1:
 
                 st.dataframe(df_display, use_container_width=True, hide_index=True)
 
-                if st.button("📥 Exportar a Excel", key="export_facturas_emitidas"):
-                    try:
-                        df_export['fecha_emision']    = pd.to_datetime(df_export['fecha_emision'])
-                        df_export['fecha_vencimiento']= pd.to_datetime(df_export['fecha_vencimiento'])
-                        df_export = df_export[['numero_factura', 'cliente', 'fecha_emision', 'fecha_vencimiento',
-                                               'cantidad_items', 'valor_unitario', 'total', 'saldo_pendiente', 'estado']]
-                        df_export.columns = [
-                            'Número Factura', 'Cliente', 'Fecha Emisión', 'Fecha Vencimiento',
-                            'Cantidad Envíos', 'Valor Unit.', 'Total', 'Saldo Pendiente', 'Estado'
-                        ]
-                        ruta = "/mnt/c/Users/mcomb/Downloads/facturas_emitidas.xlsx"
-                        with pd.ExcelWriter(ruta, engine='openpyxl') as writer:
-                            df_export.to_excel(writer, index=False, sheet_name='Facturas Emitidas')
-                        st.success(f"✅ Guardado en Descargas: facturas_emitidas.xlsx")
-                    except Exception as e:
-                        st.error(f"Error al exportar: {e}")
+                try:
+                    df_export['fecha_emision']    = pd.to_datetime(df_export['fecha_emision'])
+                    df_export['fecha_vencimiento']= pd.to_datetime(df_export['fecha_vencimiento'])
+                    df_export = df_export[['numero_factura', 'cliente', 'fecha_emision', 'fecha_vencimiento',
+                                           'cantidad_items', 'valor_unitario', 'total', 'saldo_pendiente', 'estado']]
+                    df_export.columns = [
+                        'Número Factura', 'Cliente', 'Fecha Emisión', 'Fecha Vencimiento',
+                        'Cantidad Envíos', 'Valor Unit.', 'Total', 'Saldo Pendiente', 'Estado'
+                    ]
+                    buf_fac = io.BytesIO()
+                    with pd.ExcelWriter(buf_fac, engine='openpyxl') as writer:
+                        df_export.to_excel(writer, index=False, sheet_name='Facturas Emitidas')
+                    st.download_button("📥 Exportar a Excel", buf_fac.getvalue(), "facturas_emitidas.xlsx",
+                                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                       key="export_facturas_emitidas")
+                except Exception as e:
+                    st.error(f"Error al exportar: {e}")
             else:
                 st.info("No hay facturas para el filtro seleccionado")
         except Exception as e:
@@ -888,14 +890,15 @@ with tab5:
             st.metric("TOTAL CUENTAS POR PAGAR", f"${total_general:,.0f}")
 
             st.divider()
-            if st.button("📥 Exportar a Excel", key="export_cuentas_pagar"):
-                try:
-                    ruta = "/mnt/c/Users/mcomb/Downloads/cuentas_por_pagar.xlsx"
-                    with pd.ExcelWriter(ruta, engine='openpyxl') as writer:
-                        df_cuentas.to_excel(writer, index=False, sheet_name='Cuentas por Pagar')
-                    st.success("✅ Guardado en Descargas: cuentas_por_pagar.xlsx")
-                except Exception as e:
-                    st.error(f"Error al exportar: {e}")
+            try:
+                buf_cp = io.BytesIO()
+                with pd.ExcelWriter(buf_cp, engine='openpyxl') as writer:
+                    df_cuentas.to_excel(writer, index=False, sheet_name='Cuentas por Pagar')
+                st.download_button("📥 Exportar a Excel", buf_cp.getvalue(), "cuentas_por_pagar.xlsx",
+                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                   key="export_cuentas_pagar")
+            except Exception as e:
+                st.error(f"Error al exportar: {e}")
 
         else:
             st.success("No hay cuentas por pagar pendientes")
@@ -1591,23 +1594,24 @@ with tab6:
                 with col_cap:
                     st.caption(f"{len(liquidaciones)} liquidaciones pendientes")
                 with col_exp:
-                    if st.button("📥 Exportar Excel", key="export_liq_pago"):
-                        try:
-                            df_exp = pd.DataFrame([{
-                                'Liquidacion': lq['numero_factura'],
-                                'Trabajador': lq['nombre'],
-                                'Codigo': lq['codigo'],
-                                'Tipo': lq['tipo'].capitalize(),
-                                'Fecha': pd.to_datetime(lq['fecha_recepcion']).strftime('%d/%m/%Y') if lq['fecha_recepcion'] else '',
-                                'Monto': float(lq['saldo_pendiente'] or 0),
-                                'Observaciones': lq['observaciones'] or '',
-                            } for lq in liquidaciones])
-                            ruta = "/mnt/c/Users/mcomb/Downloads/liquidaciones_pendientes.xlsx"
-                            with pd.ExcelWriter(ruta, engine='openpyxl') as writer:
-                                df_exp.to_excel(writer, index=False, sheet_name='Liquidaciones')
-                            st.success("Guardado en Descargas: liquidaciones_pendientes.xlsx")
-                        except Exception as e:
-                            st.error(f"Error al exportar: {e}")
+                    try:
+                        df_exp = pd.DataFrame([{
+                            'Liquidacion': lq['numero_factura'],
+                            'Trabajador': lq['nombre'],
+                            'Codigo': lq['codigo'],
+                            'Tipo': lq['tipo'].capitalize(),
+                            'Fecha': pd.to_datetime(lq['fecha_recepcion']).strftime('%d/%m/%Y') if lq['fecha_recepcion'] else '',
+                            'Monto': float(lq['saldo_pendiente'] or 0),
+                            'Observaciones': lq['observaciones'] or '',
+                        } for lq in liquidaciones])
+                        buf_liq = io.BytesIO()
+                        with pd.ExcelWriter(buf_liq, engine='openpyxl') as writer:
+                            df_exp.to_excel(writer, index=False, sheet_name='Liquidaciones')
+                        st.download_button("📥 Exportar Excel", buf_liq.getvalue(), "liquidaciones_pendientes.xlsx",
+                                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                           key="export_liq_pago")
+                    except Exception as e:
+                        st.error(f"Error al exportar: {e}")
 
                 if not mostrar_pagadas:
                     col_ps1, col_ps2, _ = st.columns([1.2, 1.2, 4])

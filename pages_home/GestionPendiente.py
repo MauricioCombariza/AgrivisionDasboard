@@ -71,14 +71,12 @@ if uploaded_file is not None:
                     st.warning(f"Se eliminaron {duplicados_eliminados} seriales duplicados")
                 st.write(f"**Total de pendientes mensajero (seriales únicos): {len(df_filtrado)}**")
 
-                # Crear la ruta de guardado
-                ruta_guardado = f"/mnt/c/Users/mcomb/Downloads/pendientes_códigos_{'_'.join(map(str, cod_men_list))}.xlsx"
-                
-                # Guardar el DataFrame en un archivo Excel
-                with pd.ExcelWriter(ruta_guardado, engine="openpyxl") as writer:
+                buf = io.BytesIO()
+                with pd.ExcelWriter(buf, engine="openpyxl") as writer:
                     df_filtrado.to_excel(writer, index=False, sheet_name="Hoja1")
-
-                st.success(f"Archivo guardado en: {ruta_guardado}")
+                nombre_xlsx = f"pendientes_códigos_{'_'.join(map(str, cod_men_list))}.xlsx"
+                st.download_button("📥 Descargar Excel", buf.getvalue(), nombre_xlsx,
+                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             else:
                 st.write("No hay resultados para los filtros especificados.")
                 

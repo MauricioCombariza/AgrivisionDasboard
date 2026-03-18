@@ -671,28 +671,14 @@ with tab1:
         st.markdown("### Exportar Resultado")
 
         nombre_archivo = f"agrupacion_{anio_seleccionado}_pendientes.csv"
-        ruta_salida = f"/mnt/c/Users/mcomb/Downloads/{nombre_archivo}"
 
-        col_btn1, col_btn2 = st.columns(2)
-
-        with col_btn1:
-            # Boton de descarga en navegador
-            csv_data = resultado.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="Descargar CSV",
-                data=csv_data,
-                file_name=nombre_archivo,
-                mime="text/csv"
-            )
-
-        with col_btn2:
-            # Boton para guardar en disco
-            if st.button("Guardar en Descargas"):
-                try:
-                    resultado.to_csv(ruta_salida, index=False)
-                    st.success(f"Archivo guardado en: {ruta_salida}")
-                except Exception as e:
-                    st.error(f"Error al guardar: {e}")
+        csv_data = resultado.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="Descargar CSV",
+            data=csv_data,
+            file_name=nombre_archivo,
+            mime="text/csv"
+        )
 
         # =====================================================
         # REGISTRAR GESTIONES EN BASE DE DATOS
@@ -1058,27 +1044,14 @@ with tab2:
                 else:
                     nombre_archivo_paq = "paquetes_resultado.csv"
 
-                ruta_salida_paq = f"/mnt/c/Users/mcomb/Downloads/{nombre_archivo_paq}"
-
-                col_btn1, col_btn2 = st.columns(2)
-
-                with col_btn1:
-                    csv_data = df_final.to_csv(index=False).encode('utf-8')
-                    st.download_button(
-                        label="Descargar CSV",
-                        data=csv_data,
-                        file_name=nombre_archivo_paq,
-                        mime="text/csv",
-                        key="download_paquetes"
-                    )
-
-                with col_btn2:
-                    if st.button("Guardar en Descargas", key="guardar_paquetes"):
-                        try:
-                            df_final.to_csv(ruta_salida_paq, index=False)
-                            st.success(f"Archivo guardado en: {ruta_salida_paq}")
-                        except Exception as e:
-                            st.error(f"Error al guardar: {e}")
+                csv_data = df_final.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Descargar CSV",
+                    data=csv_data,
+                    file_name=nombre_archivo_paq,
+                    mime="text/csv",
+                    key="download_paquetes"
+                )
 
         except Exception as e:
             st.error(f"Error al cargar el archivo: {e}")
