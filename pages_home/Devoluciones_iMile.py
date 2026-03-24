@@ -107,45 +107,53 @@ def _json_error(stdout: str) -> str | None:
     return None
 
 
-# ── Base de datos ─────────────────────────────────────────────────────────────
-def _conectar_mysql():
-    is_wsl = "microsoft" in platform.uname().release.lower()
-    if is_wsl:
-        try:
-            res = subprocess.run(["ip", "route", "show"], capture_output=True, text=True)
-            for line in res.stdout.split("\n"):
-                if "default" in line:
-                    windows_ip = line.split()[2]
-                    try:
-                        return mysql.connector.connect(
-                            host=windows_ip, user="root",
-                            password=os.environ.get("DB_PASSWORD", ""), database="imile",
-                        )
-                    except Exception:
-                        break
-        except Exception:
-            pass
-    return mysql.connector.connect(
-        host=os.environ.get("DB_HOST","localhost"), user=os.environ.get("DB_USER","root"), password=os.environ.get("DB_PASSWORD",""), database="imile",
-    )
+# ── Base local ────────────────────────────────────────────────────────────────
+def _conectar_imile():
+    """Conexión al imile local (MySQL)."""
+    try:
+        return mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="",
+            database="imile",
+        )
+    except mysql.connector.Error:
+        return None
 
 
 def _buscar_serial(serial: str):
-    conn = None
-    try:
-        conn = _conectar_mysql()
-        with conn.cursor(dictionary=True) as cur:
+    """Busca un serial en la BD local imile.paquetes (fuente persistente)."""
+    conn = _conectar_imile()
+    if conn is not None:
+        try:
+            cur = conn.cursor(dictionary=True)
             cur.execute(
-                "SELECT serial, nombre, direccion, telefono "
-                "FROM paquetes WHERE serial = %s LIMIT 1",
+                "SELECT serial, nombre, telefono, direccion FROM paquetes WHERE serial = %s",
                 (serial.strip(),),
             )
-            return cur.fetchone()
-    except Exception:
+            row = cur.fetchone()
+            cur.close()
+            return row  # dict o None
+        except Exception:
+            pass
+        finally:
+            if conn.is_connected():
+                conn.close()
+
+    # Fallback: session_state (útil si la BD no está disponible)
+    df: pd.DataFrame | None = st.session_state.get("ip_df_base")
+    if df is None or df.empty:
         return None
-    finally:
-        if conn and conn.is_connected():
-            conn.close()
+    fila = df[df["serial"] == serial.strip()]
+    if fila.empty:
+        return None
+    row = fila.iloc[0]
+    return {
+        "serial":    row["serial"],
+        "nombre":    row.get("nombre", ""),
+        "direccion": row.get("direccion", ""),
+        "telefono":  row.get("telefono", ""),
+    }
 
 
 # ── Enriquecimiento ───────────────────────────────────────────────────────────
@@ -338,6 +346,17 @@ st.markdown(
 for key, val in [("devol_df", None), ("devol_idx", 0)]:
     if key not in st.session_state:
         st.session_state[key] = val
+
+if st.session_state.get("ip_df_base") is None:
+    conn_test = _conectar_imile()
+    if conn_test is None:
+        st.warning(
+            "No hay base local cargada ni conexión a la BD. Ve a **Ingreso paquetes → Subir bases** "
+            "y presiona «Guardar base localmente» primero."
+        )
+        st.stop()
+    else:
+        conn_test.close()
 
 st.divider()
 

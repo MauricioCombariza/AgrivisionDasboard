@@ -117,11 +117,33 @@ with tab1:
 
                 # Reordenar columnas
                 df_display = df[['numero_factura', 'cliente', 'fecha_emision', 'fecha_vencimiento',
-                                 'cantidad_items', 'valor_unitario', 'total', 'saldo_pendiente', 'estado']]
+                                 'cantidad_items', 'valor_unitario', 'total', 'saldo_pendiente', 'estado']].copy()
                 df_display.columns = ['Número Factura', 'Cliente', 'Fecha Emisión', 'Fecha Vencimiento',
                                       'Cantidad Envíos', 'Valor Unit.', 'Total', 'Saldo Pendiente', 'Estado']
+                df_display.insert(0, '☑', False)
 
-                st.dataframe(df_display, use_container_width=True, hide_index=True)
+                edited = st.data_editor(
+                    df_display,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={'☑': st.column_config.CheckboxColumn('☑', width='small')},
+                    disabled=[c for c in df_display.columns if c != '☑'],
+                    key="fe_check_table",
+                )
+
+                seleccionadas = edited[edited['☑']]
+                if not seleccionadas.empty:
+                    # Obtener totales y saldos numéricos de df_export para las filas seleccionadas
+                    idx_sel = seleccionadas.index
+                    total_sel   = df_export.loc[idx_sel, 'total'].astype(float).sum()
+                    saldo_sel   = df_export.loc[idx_sel, 'saldo_pendiente'].astype(float).sum()
+                    items_sel   = df_export.loc[idx_sel, 'cantidad_items'].astype(float).sum()
+                    st.info(
+                        f"**{len(seleccionadas)} factura(s) seleccionada(s)** — "
+                        f"Envíos: **{int(items_sel):,}** · "
+                        f"Total: **${total_sel:,.0f}** · "
+                        f"Saldo por cobrar: **${saldo_sel:,.0f}**"
+                    )
 
                 try:
                     df_export['fecha_emision']    = pd.to_datetime(df_export['fecha_emision'])
