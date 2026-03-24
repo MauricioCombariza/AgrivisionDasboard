@@ -1,0 +1,29 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 204.168.150.196
+          username: root
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/carvajal
+            git pull origin main
+            pkill -f "streamlit run app.py" || true
+            sleep 2
+            nohup /root/miniconda3/envs/dashboard/bin/streamlit run app.py \
+              --server.port=8501 \
+              --server.address=0.0.0.0 \
+              > /var/log/streamlit.log 2>&1 &
+            echo "Deploy completado OK"
