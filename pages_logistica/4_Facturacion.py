@@ -22,6 +22,8 @@ if 'facturacion_schema_ok' not in st.session_state:
         "ALTER TABLE registro_horas ADD COLUMN liquidado TINYINT(1) NOT NULL DEFAULT 0",
         "ALTER TABLE registro_labores ADD COLUMN liquidado TINYINT(1) NOT NULL DEFAULT 0",
         "ALTER TABLE facturas_recibidas MODIFY COLUMN tipo VARCHAR(50) NOT NULL DEFAULT 'otros'",
+        "ALTER TABLE gastos_administrativos ADD COLUMN empresa VARCHAR(200) NULL",
+        "ALTER TABLE gastos_administrativos ADD COLUMN numero_factura_ext VARCHAR(100) NULL",
     ]:
         try:
             _c = conn.cursor()
@@ -47,13 +49,14 @@ if 'facturacion_schema_ok' not in st.session_state:
 
     st.session_state['facturacion_schema_ok'] = True
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📄 Facturas Emitidas (Clientes)",
     "💵 Registrar Pago Recibido",
     "📊 Resumen Financiero",
     "📥 Facturas Proveedores",
     "📋 Cuentas por Pagar",
-    "👷 Pago Personal"
+    "👷 Pago Personal",
+    "💼 Adelantos Dueño",
 ])
 
 with tab1:
@@ -1831,6 +1834,155 @@ with tab6:
 
         except Exception as e:
             st.error(f"Error: {e}")
+
+with tab7:
+    st.subheader("💼 Adelantos Dueño — Facturas Pagadas por el Propietario")
+    st.info(
+        "Registra aquí las facturas que pagaste de tu bolsillo a nombre de la empresa. "
+        "Quedan clasificadas como **Gasto Administrativo** y aparecen en Cuentas por Pagar."
+    )
+
+    try:
+        cursor_t7 = conn.cursor(dictionary=True)
+
+        # ── Formulario de ingreso ──────────────────────────────────────────────
+        st.markdown("### ➕ Registrar Factura Pagada")
+
+        with st.form("form_adelanto_dueno", clear_on_submit=True):
+            col_a, col_b = st.columns(2)
+
+            with col_a:
+                ad_fecha      = st.date_input("Fecha de la factura *", value=date.today(), key="ad_fecha")
+                ad_empresa    = st.text_input("Empresa / Proveedor *", key="ad_empresa",
+                                              placeholder="Ej: Claro, Seguros Bolívar, Almacén XYZ")
+                ad_num_fac    = st.text_input("Número de factura", key="ad_num_fac",
+                                              placeholder="Ej: FE-2025-001")
+
+            with col_b:
+                ad_motivo     = st.text_area("Motivo / Descripción *", key="ad_motivo",
+                                             placeholder="Ej: Pago internet mes de marzo",
+                                             height=100)
+                ad_monto      = st.number_input("Monto pagado *", min_value=0.0,
+                                                step=1000.0, format="%.0f", key="ad_monto")
+
+            ad_submit = st.form_submit_button("💾 Registrar adelanto", type="primary")
+
+            if ad_submit:
+                errores = []
+                if not ad_empresa.strip():
+                    errores.append("La empresa es obligatoria.")
+                if not ad_motivo.strip():
+                    errores.append("El motivo es obligatorio.")
+                if ad_monto <= 0:
+                    errores.append("El monto debe ser mayor a 0.")
+
+                if errores:
+                    for err in errores:
+                        st.error(err)
+                else:
+                    descripcion_bd = ad_motivo.strip()
+                    if ad_num_fac.strip():
+                        descripcion_bd = f"Factura {ad_num_fac.strip()} — {descripcion_bd}"
+
+                    try:
+                        cursor_ins = conn.cursor()
+                        cursor_ins.execute("""
+                            INSERT INTO gastos_administrativos
+                                (fecha, categoria, descripcion, monto, estado, empresa, numero_factura_ext)
+                            VALUES (%s, %s, %s, %s, 'pendiente', %s, %s)
+                        """, (
+                            ad_fecha,
+                            "Adelanto Dueño",
+                            descripcion_bd,
+                            ad_monto,
+                            ad_empresa.strip(),
+                            ad_num_fac.strip() or None,
+                        ))
+                        conn.commit()
+                        cursor_ins.close()
+                        st.success(f"✅ Registrado: {ad_empresa.strip()} — ${ad_monto:,.0f}")
+                        st.rerun()
+                    except Exception as e:
+                        conn.rollback()
+                        st.error(f"Error al guardar: {e}")
+
+        st.divider()
+
+        # ── Listado de adelantos ───────────────────────────────────────────────
+        st.markdown("### 📋 Adelantos Registrados")
+
+        filtro_ad = st.radio(
+            "Mostrar",
+            ["Pendientes", "Pagados", "Todos"],
+            horizontal=True,
+            key="filtro_adelantos"
+        )
+        where_ad = {
+            "Pendientes": "AND estado = 'pendiente'",
+            "Pagados":    "AND estado = 'pagado'",
+            "Todos":      "",
+        }[filtro_ad]
+
+        cursor_t7.execute(f"""
+            SELECT id, fecha, empresa, numero_factura_ext, descripcion, monto, estado
+            FROM gastos_administrativos
+            WHERE categoria = 'Adelanto Dueño' {where_ad}
+            ORDER BY fecha DESC
+            LIMIT 200
+        """)
+        adelantos = cursor_t7.fetchall()
+
+        if adelantos:
+            total_pendiente = sum(float(r['monto']) for r in adelantos if r['estado'] == 'pendiente')
+            total_pagado    = sum(float(r['monto']) for r in adelantos if r['estado'] == 'pagado')
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Registros mostrados", len(adelantos))
+            m2.metric("Pendiente de reembolso", f"${total_pendiente:,.0f}")
+            m3.metric("Ya reembolsado", f"${total_pagado:,.0f}")
+
+            st.divider()
+
+            for ad in adelantos:
+                icon = "🟡" if ad['estado'] == 'pendiente' else "🟢"
+                fac_label = f" — Factura: {ad['numero_factura_ext']}" if ad['numero_factura_ext'] else ""
+                with st.expander(
+                    f"{icon} {ad['fecha'].strftime('%d/%m/%Y')} | {ad['empresa']}{fac_label} — ${float(ad['monto']):,.0f}"
+                ):
+                    st.write(f"**Descripción:** {ad['descripcion']}")
+                    st.write(f"**Estado:** {ad['estado'].capitalize()}")
+
+                    col_e1, col_e2, _ = st.columns([1, 1, 2])
+                    with col_e1:
+                        nuevo_est = st.selectbox(
+                            "Estado",
+                            ["pendiente", "pagado", "anulado"],
+                            index=["pendiente", "pagado", "anulado"].index(ad['estado'])
+                                  if ad['estado'] in ["pendiente", "pagado", "anulado"] else 0,
+                            key=f"est_ad_{ad['id']}",
+                            label_visibility="collapsed",
+                        )
+                    with col_e2:
+                        if st.button("Actualizar", key=f"btn_ad_{ad['id']}"):
+                            try:
+                                cursor_upd = conn.cursor()
+                                cursor_upd.execute(
+                                    "UPDATE gastos_administrativos SET estado = %s WHERE id = %s",
+                                    (nuevo_est, ad['id'])
+                                )
+                                conn.commit()
+                                cursor_upd.close()
+                                st.success("Estado actualizado")
+                                st.rerun()
+                            except Exception as e:
+                                conn.rollback()
+                                st.error(f"Error: {e}")
+        else:
+            st.info("No hay adelantos registrados para el filtro seleccionado.")
+
+    except Exception as e:
+        st.error(f"Error: {e}")
+
 
 if 'cursor' in locals():
     cursor.close()
