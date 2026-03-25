@@ -26,48 +26,16 @@ IMILE_PASS = os.getenv("IMILE_PASS")
 # 🗃 MÓDULO MYSQL
 # ----------------------------
 def conectar_mysql():
-    """Conexión con pool de conexiones"""
+    """Conexión a la BD local imile (localhost)."""
     try:
-        import platform
-        is_wsl = 'microsoft' in platform.uname().release.lower()
-
-        if is_wsl:
-            import subprocess as sp
-            try:
-                result = sp.run(
-                    ["ip", "route", "show"],
-                    capture_output=True,
-                    text=True
-                )
-                windows_ip = None
-                for line in result.stdout.split('\n'):
-                    if 'default' in line:
-                        windows_ip = line.split()[2]
-                        break
-
-                if windows_ip:
-                    try:
-                        return mysql.connector.connect(
-                            host=windows_ip,
-                            user="root",
-                            password=os.environ.get("DB_PASSWORD", ""),
-                            database="imile",
-                            pool_size=3
-                        )
-                    except:
-                        pass
-            except:
-                pass
-
         return mysql.connector.connect(
-            host=os.environ.get("DB_HOST", "localhost"),
-            user=os.environ.get("DB_USER", "root"),
-            password=os.environ.get("DB_PASSWORD", ""),
+            host="localhost",
+            user="root",
+            password="",
             database="imile",
-            pool_size=3
         )
     except Exception as e:
-        st.error("Error de conexión a MySQL")
+        st.error(f"Error de conexión a BD local: {e}")
         return None
 
 def buscar_datos_por_serial(serial):

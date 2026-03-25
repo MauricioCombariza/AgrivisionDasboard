@@ -14,23 +14,23 @@ st.title("Agrupacion por Escaner")
 def conectar_db():
     try:
         conn = mysql.connector.connect(
-            host=os.environ.get("DB_HOST", "localhost"),
-            user=os.environ.get("DB_USER", "root"),
-            password=os.environ.get("DB_PASSWORD", ""),
+            host="localhost",
+            user="root",
+            password="",
             database="logistica"
         )
         return conn
     except Exception as e:
-        st.error(f"Error conectando a BD: {e}")
+        st.error(f"Error conectando a BD local: {e}")
         return None
 
 def nueva_conexion():
     """Conexion fresca (sin cache) para operaciones de escritura"""
     try:
         return mysql.connector.connect(
-            host=os.environ.get("DB_HOST", "localhost"),
-            user=os.environ.get("DB_USER", "root"),
-            password=os.environ.get("DB_PASSWORD", ""),
+            host="localhost",
+            user="root",
+            password="",
             database="logistica"
         )
     except Exception:

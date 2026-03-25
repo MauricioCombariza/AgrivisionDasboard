@@ -1,0 +1,1333 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agrivision — Tu campo en datos, tu producto en destino</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;0,700;1,300;1,400&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    /* ─── Reset & Base ─── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --earth:      #0E2318;
+      --forest:     #1A3D2B;
+      --canopy:     #2D6644;
+      --sprout:     #4CAF76;
+      --wheat:      #C8A55A;
+      --soil:       #7A5C38;
+      --cream:      #F2EDE3;
+      --fog:        #D4CFBF;
+      --data:       #A8E6BE;
+      --signal:     #E8F5A0;
+      --ink:        #0B1C12;
+      --glass:      rgba(255,255,255,0.05);
+      --glass-edge: rgba(255,255,255,0.12);
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Instrument Sans', sans-serif;
+      background: var(--earth);
+      color: var(--cream);
+      overflow-x: hidden;
+      cursor: none;
+    }
+
+    /* ─── Custom Cursor ─── */
+    #cursor {
+      position: fixed;
+      width: 10px; height: 10px;
+      background: var(--signal);
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 9999;
+      transform: translate(-50%, -50%);
+      transition: transform 0.1s ease, width 0.3s, height 0.3s, background 0.3s;
+      mix-blend-mode: difference;
+    }
+    #cursor-ring {
+      position: fixed;
+      width: 36px; height: 36px;
+      border: 1px solid var(--signal);
+      border-radius: 50%;
+      pointer-events: none;
+      z-index: 9998;
+      transform: translate(-50%, -50%);
+      transition: transform 0.25s cubic-bezier(.17,.67,.45,1.2), width 0.3s, height 0.3s, opacity 0.3s;
+      opacity: 0.5;
+    }
+    body:hover #cursor-ring { opacity: 1; }
+
+    /* ─── Topographic SVG Canvas ─── */
+    #topo-canvas {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      opacity: 0.07;
+      pointer-events: none;
+    }
+
+    /* ─── Particle Field ─── */
+    #particle-field {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    /* ─── Nav ─── */
+    nav {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1.25rem 3rem;
+      background: linear-gradient(to bottom, rgba(14,35,24,0.95), transparent);
+      backdrop-filter: blur(12px) saturate(1.4);
+    }
+
+    .nav-logo {
+      display: flex;
+      flex-direction: column;
+      line-height: 1;
+    }
+    .nav-logo .brand-from {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.6rem;
+      letter-spacing: 0.25em;
+      color: var(--wheat);
+      text-transform: uppercase;
+      opacity: 0.7;
+    }
+    .nav-logo .brand-main {
+      font-family: 'Cormorant Garamond', serif;
+      font-weight: 600;
+      font-size: 1.6rem;
+      color: var(--cream);
+      letter-spacing: 0.04em;
+    }
+    .nav-logo .brand-main span {
+      color: var(--sprout);
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 2.5rem;
+      list-style: none;
+    }
+    .nav-links a {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.75rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--fog);
+      text-decoration: none;
+      transition: color 0.2s;
+      position: relative;
+    }
+    .nav-links a::after {
+      content: '';
+      position: absolute;
+      bottom: -4px; left: 0;
+      width: 0; height: 1px;
+      background: var(--sprout);
+      transition: width 0.3s;
+    }
+    .nav-links a:hover { color: var(--cream); }
+    .nav-links a:hover::after { width: 100%; }
+
+    .nav-cta {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.72rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--ink);
+      background: var(--signal);
+      border: none;
+      padding: 0.6rem 1.4rem;
+      cursor: none;
+      transition: background 0.2s, transform 0.15s;
+    }
+    .nav-cta:hover { background: var(--data); transform: translateY(-1px); }
+
+    /* ─── Hero ─── */
+    .hero {
+      position: relative;
+      z-index: 2;
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      align-items: center;
+      padding: 0 3rem;
+      gap: 4rem;
+      overflow: hidden;
+    }
+
+    .hero-left {
+      padding-top: 8rem;
+      padding-bottom: 4rem;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      border: 1px solid var(--glass-edge);
+      background: var(--glass);
+      padding: 0.4rem 1rem;
+      margin-bottom: 2.5rem;
+      backdrop-filter: blur(8px);
+    }
+    .hero-badge .dot {
+      width: 6px; height: 6px;
+      background: var(--sprout);
+      border-radius: 50%;
+      animation: pulse-dot 2s infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.7); }
+    }
+    .hero-badge span {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.65rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--data);
+    }
+
+    .hero-eyebrow {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      color: var(--wheat);
+      margin-bottom: 1rem;
+      opacity: 0.8;
+    }
+
+    .hero-title {
+      font-family: 'Cormorant Garamond', serif;
+      font-weight: 300;
+      font-size: clamp(3.2rem, 5vw, 5.5rem);
+      line-height: 1.05;
+      color: var(--cream);
+      margin-bottom: 1.5rem;
+    }
+    .hero-title em {
+      font-style: italic;
+      color: var(--data);
+    }
+    .hero-title strong {
+      font-weight: 700;
+      display: block;
+    }
+
+    .hero-tagline {
+      font-family: 'Cormorant Garamond', serif;
+      font-style: italic;
+      font-size: 1.35rem;
+      color: var(--wheat);
+      letter-spacing: 0.02em;
+      line-height: 1.5;
+      margin-bottom: 3rem;
+      padding-left: 1rem;
+      border-left: 2px solid var(--canopy);
+      max-width: 38ch;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 1.25rem;
+      align-items: center;
+    }
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.6rem;
+      background: var(--sprout);
+      color: var(--ink);
+      padding: 0.9rem 2rem;
+      font-family: 'Instrument Sans', sans-serif;
+      font-weight: 600;
+      font-size: 0.85rem;
+      letter-spacing: 0.04em;
+      text-decoration: none;
+      cursor: none;
+      transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
+      border: none;
+    }
+    .btn-primary:hover {
+      background: var(--data);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 32px rgba(76,175,118,0.35);
+    }
+    .btn-primary svg { transition: transform 0.2s; }
+    .btn-primary:hover svg { transform: translateX(3px); }
+
+    .btn-secondary {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.75rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--fog);
+      text-decoration: none;
+      cursor: none;
+      transition: color 0.2s;
+    }
+    .btn-secondary:hover { color: var(--cream); }
+
+    /* ─── Hero Right: Data Orb ─── */
+    .hero-right {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 600px;
+      padding-top: 6rem;
+    }
+
+    .orb-container {
+      position: relative;
+      width: 420px;
+      height: 420px;
+    }
+    .orb-ring {
+      position: absolute;
+      border-radius: 50%;
+      border: 1px solid;
+      animation: rotate-ring linear infinite;
+    }
+    .orb-ring:nth-child(1) {
+      inset: 0;
+      border-color: rgba(76,175,118,0.3);
+      animation-duration: 20s;
+    }
+    .orb-ring:nth-child(2) {
+      inset: 30px;
+      border-color: rgba(200,165,90,0.2);
+      animation-duration: 30s;
+      animation-direction: reverse;
+    }
+    .orb-ring:nth-child(3) {
+      inset: 60px;
+      border-color: rgba(168,230,190,0.15);
+      animation-duration: 15s;
+    }
+    @keyframes rotate-ring {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+
+    .orb-core {
+      position: absolute;
+      inset: 90px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 35%,
+        rgba(76,175,118,0.35) 0%,
+        rgba(45,102,68,0.6) 40%,
+        rgba(26,61,43,0.9) 100%
+      );
+      border: 1px solid rgba(76,175,118,0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(4px);
+    }
+
+    /* Dot on ring */
+    .orb-ring::before {
+      content: '';
+      position: absolute;
+      top: -4px; left: 50%;
+      width: 8px; height: 8px;
+      margin-left: -4px;
+      background: var(--sprout);
+      border-radius: 50%;
+      box-shadow: 0 0 12px var(--sprout);
+    }
+
+    .orb-data-label {
+      text-align: center;
+    }
+    .orb-data-label .value {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 2.8rem;
+      font-weight: 300;
+      color: var(--cream);
+      display: block;
+    }
+    .orb-data-label .unit {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.6rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--data);
+    }
+
+    /* Floating data cards */
+    .data-card {
+      position: absolute;
+      background: rgba(14,35,24,0.85);
+      border: 1px solid var(--glass-edge);
+      backdrop-filter: blur(12px);
+      padding: 0.9rem 1.2rem;
+      min-width: 140px;
+      animation: float-card 6s ease-in-out infinite;
+    }
+    .data-card:nth-child(5) {
+      top: 20px; right: -20px;
+      animation-delay: 0s;
+    }
+    .data-card:nth-child(6) {
+      bottom: 60px; left: -30px;
+      animation-delay: 2s;
+    }
+    .data-card:nth-child(7) {
+      bottom: 20px; right: 10px;
+      animation-delay: 4s;
+    }
+    @keyframes float-card {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-8px); }
+    }
+    .data-card .card-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.55rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--wheat);
+      margin-bottom: 0.3rem;
+    }
+    .data-card .card-value {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 1.6rem;
+      font-weight: 600;
+      color: var(--cream);
+      line-height: 1;
+    }
+    .data-card .card-trend {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.6rem;
+      color: var(--sprout);
+      margin-top: 0.2rem;
+    }
+    .data-card .mini-bar {
+      display: flex;
+      gap: 2px;
+      margin-top: 0.5rem;
+      align-items: flex-end;
+      height: 20px;
+    }
+    .mini-bar span {
+      flex: 1;
+      background: var(--canopy);
+      border-radius: 1px;
+      transition: background 0.3s;
+    }
+    .mini-bar span.active { background: var(--sprout); }
+
+    /* ─── Ticker ─── */
+    .ticker {
+      position: relative;
+      z-index: 2;
+      border-top: 1px solid var(--glass-edge);
+      border-bottom: 1px solid var(--glass-edge);
+      background: rgba(26,61,43,0.4);
+      backdrop-filter: blur(8px);
+      overflow: hidden;
+      padding: 0.75rem 0;
+    }
+    .ticker-track {
+      display: flex;
+      gap: 0;
+      white-space: nowrap;
+      animation: ticker-scroll 30s linear infinite;
+    }
+    @keyframes ticker-scroll {
+      from { transform: translateX(0); }
+      to   { transform: translateX(-50%); }
+    }
+    .ticker-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0 3rem;
+      font-family: 'DM Mono', monospace;
+      font-size: 0.7rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--fog);
+    }
+    .ticker-item .sep {
+      width: 4px; height: 4px;
+      background: var(--wheat);
+      border-radius: 50%;
+      opacity: 0.4;
+    }
+    .ticker-item strong { color: var(--data); font-weight: 500; }
+
+    /* ─── Section: Features ─── */
+    .section-features {
+      position: relative;
+      z-index: 2;
+      padding: 7rem 3rem;
+    }
+
+    .section-header {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4rem;
+      margin-bottom: 5rem;
+      align-items: end;
+    }
+    .section-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.65rem;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      color: var(--wheat);
+      margin-bottom: 1rem;
+    }
+    .section-title {
+      font-family: 'Cormorant Garamond', serif;
+      font-weight: 300;
+      font-size: clamp(2.2rem, 3.5vw, 3.8rem);
+      color: var(--cream);
+      line-height: 1.1;
+    }
+    .section-title em {
+      font-style: italic;
+      color: var(--data);
+    }
+    .section-body {
+      font-size: 0.9rem;
+      color: var(--fog);
+      line-height: 1.8;
+      max-width: 36ch;
+      align-self: end;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.5px;
+      background: var(--glass-edge);
+    }
+
+    .feature-card {
+      background: var(--forest);
+      padding: 2.5rem;
+      position: relative;
+      overflow: hidden;
+      transition: background 0.3s;
+    }
+    .feature-card::before {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--canopy), transparent);
+      transform: scaleX(0);
+      transition: transform 0.4s;
+    }
+    .feature-card:hover { background: rgba(45,102,68,0.3); }
+    .feature-card:hover::before { transform: scaleX(1); }
+
+    .feature-icon {
+      width: 44px; height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--canopy);
+      margin-bottom: 1.5rem;
+      font-size: 1.2rem;
+    }
+    .feature-num {
+      position: absolute;
+      top: 1.5rem; right: 1.5rem;
+      font-family: 'DM Mono', monospace;
+      font-size: 0.6rem;
+      letter-spacing: 0.15em;
+      color: var(--canopy);
+    }
+    .feature-title {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 1.5rem;
+      font-weight: 600;
+      color: var(--cream);
+      margin-bottom: 0.75rem;
+    }
+    .feature-desc {
+      font-size: 0.83rem;
+      color: var(--fog);
+      line-height: 1.7;
+    }
+    .feature-tag {
+      display: inline-block;
+      margin-top: 1.5rem;
+      font-family: 'DM Mono', monospace;
+      font-size: 0.58rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--sprout);
+      border-bottom: 1px solid var(--canopy);
+      padding-bottom: 2px;
+    }
+
+    /* ─── Section: Transition Strip ─── */
+    .transition-strip {
+      position: relative;
+      z-index: 2;
+      background: var(--forest);
+      border-top: 1px solid var(--glass-edge);
+      border-bottom: 1px solid var(--glass-edge);
+      padding: 5rem 3rem;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 3rem;
+      align-items: center;
+    }
+
+    .brand-old, .brand-new {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .brand-old { align-items: flex-end; }
+    .brand-new { align-items: flex-start; }
+
+    .brand-small-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.6rem;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--wheat);
+      opacity: 0.6;
+    }
+    .brand-name-old {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 3rem;
+      font-weight: 300;
+      font-style: italic;
+      color: var(--fog);
+      opacity: 0.5;
+      text-decoration: line-through;
+      text-decoration-color: var(--soil);
+    }
+    .brand-name-new {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 3rem;
+      font-weight: 600;
+      color: var(--cream);
+    }
+    .brand-name-new span { color: var(--sprout); }
+
+    .transition-arrow {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .arrow-line {
+      width: 80px;
+      height: 1px;
+      background: linear-gradient(90deg, var(--soil), var(--sprout));
+      position: relative;
+    }
+    .arrow-line::after {
+      content: '→';
+      position: absolute;
+      right: -10px; top: -10px;
+      color: var(--sprout);
+      font-size: 1rem;
+    }
+    .arrow-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.6rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--canopy);
+    }
+
+    .transition-tagline {
+      grid-column: 1 / -1;
+      text-align: center;
+      margin-top: 2rem;
+    }
+    .transition-tagline blockquote {
+      font-family: 'Cormorant Garamond', serif;
+      font-style: italic;
+      font-size: clamp(1.5rem, 2.5vw, 2.5rem);
+      font-weight: 300;
+      color: var(--wheat);
+      border: none;
+      line-height: 1.4;
+    }
+    .transition-tagline blockquote strong {
+      font-weight: 700;
+      font-style: normal;
+      color: var(--data);
+    }
+
+    /* ─── Section: Stats ─── */
+    .section-stats {
+      position: relative;
+      z-index: 2;
+      padding: 6rem 3rem;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1.5px;
+      background: var(--glass-edge);
+    }
+    .stat-cell {
+      background: var(--earth);
+      padding: 2.5rem;
+      text-align: center;
+    }
+    .stat-value {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 3.5rem;
+      font-weight: 300;
+      color: var(--cream);
+      display: block;
+      line-height: 1;
+    }
+    .stat-value span { color: var(--sprout); }
+    .stat-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.62rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--fog);
+      margin-top: 0.75rem;
+      display: block;
+    }
+
+    /* ─── Section: CTA ─── */
+    .section-cta {
+      position: relative;
+      z-index: 2;
+      padding: 8rem 3rem;
+      text-align: center;
+      overflow: hidden;
+    }
+    .cta-bg-text {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 18vw;
+      font-weight: 700;
+      color: rgba(76,175,118,0.04);
+      white-space: nowrap;
+      pointer-events: none;
+      letter-spacing: -0.03em;
+    }
+    .cta-eyebrow {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.65rem;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      color: var(--wheat);
+      margin-bottom: 1.5rem;
+    }
+    .cta-title {
+      font-family: 'Cormorant Garamond', serif;
+      font-weight: 300;
+      font-size: clamp(2.5rem, 5vw, 5rem);
+      color: var(--cream);
+      line-height: 1.1;
+      max-width: 14ch;
+      margin: 0 auto 2.5rem;
+    }
+    .cta-title em {
+      font-style: italic;
+      color: var(--data);
+    }
+    .cta-actions {
+      display: flex;
+      gap: 1.5rem;
+      justify-content: center;
+      align-items: center;
+    }
+    .btn-large {
+      padding: 1.1rem 3rem;
+      font-size: 0.9rem;
+    }
+
+    /* ─── Footer ─── */
+    footer {
+      position: relative;
+      z-index: 2;
+      border-top: 1px solid var(--glass-edge);
+      padding: 3rem;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      background: var(--earth);
+    }
+    .footer-left {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.6rem;
+      letter-spacing: 0.15em;
+      color: var(--canopy);
+    }
+    .footer-brand {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 1.2rem;
+      font-weight: 600;
+      color: var(--fog);
+      text-align: center;
+    }
+    .footer-brand span { color: var(--sprout); }
+    .footer-right {
+      text-align: right;
+      font-family: 'DM Mono', monospace;
+      font-size: 0.6rem;
+      letter-spacing: 0.1em;
+      color: var(--canopy);
+    }
+
+    /* ─── Scroll indicator ─── */
+    .scroll-indicator {
+      position: absolute;
+      bottom: 2.5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+      z-index: 5;
+    }
+    .scroll-indicator span {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.55rem;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--canopy);
+    }
+    .scroll-line {
+      width: 1px;
+      height: 40px;
+      background: linear-gradient(to bottom, var(--canopy), transparent);
+      animation: scroll-pulse 2s ease-in-out infinite;
+    }
+    @keyframes scroll-pulse {
+      0%, 100% { opacity: 0.4; transform: scaleY(1); }
+      50% { opacity: 1; transform: scaleY(0.6); transform-origin: top; }
+    }
+
+    /* ─── Entrance Animations ─── */
+    @keyframes fade-up {
+      from { opacity: 0; transform: translateY(24px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .hero-badge   { animation: fade-up 0.6s ease both; animation-delay: 0.1s; }
+    .hero-eyebrow { animation: fade-up 0.6s ease both; animation-delay: 0.2s; }
+    .hero-title   { animation: fade-up 0.7s ease both; animation-delay: 0.3s; }
+    .hero-tagline { animation: fade-up 0.7s ease both; animation-delay: 0.45s; }
+    .hero-actions { animation: fade-up 0.6s ease both; animation-delay: 0.6s; }
+    .hero-right   { animation: fade-up 0.8s ease both; animation-delay: 0.4s; }
+
+    /* ─── Responsive ─── */
+    @media (max-width: 900px) {
+      nav { padding: 1rem 1.5rem; }
+      .nav-links { display: none; }
+      .hero {
+        grid-template-columns: 1fr;
+        padding: 0 1.5rem;
+        gap: 2rem;
+        min-height: auto;
+        padding-bottom: 4rem;
+      }
+      .hero-left { padding-top: 7rem; }
+      .hero-right { display: none; }
+      .section-header { grid-template-columns: 1fr; gap: 1.5rem; }
+      .features-grid { grid-template-columns: 1fr; }
+      .section-stats { grid-template-columns: 1fr 1fr; }
+      .transition-strip { grid-template-columns: 1fr; text-align: center; }
+      .brand-old, .brand-new { align-items: center; }
+      .transition-arrow { transform: rotate(90deg); margin: 1rem auto; }
+      .section-features, .section-cta { padding: 4rem 1.5rem; }
+      footer { grid-template-columns: 1fr; text-align: center; gap: 1rem; }
+      .footer-right { text-align: center; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Custom Cursor -->
+  <div id="cursor"></div>
+  <div id="cursor-ring"></div>
+
+  <!-- Topographic SVG Background -->
+  <svg id="topo-canvas" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <filter id="blur-topo">
+        <feGaussianBlur stdDeviation="0.8"/>
+      </filter>
+    </defs>
+    <g fill="none" stroke="#4CAF76" stroke-width="0.8" filter="url(#blur-topo)">
+      <ellipse cx="720" cy="450" rx="650" ry="300" />
+      <ellipse cx="720" cy="450" rx="580" ry="250" />
+      <ellipse cx="720" cy="450" rx="510" ry="200" />
+      <ellipse cx="720" cy="450" rx="440" ry="155" />
+      <ellipse cx="720" cy="450" rx="370" ry="115" />
+      <ellipse cx="720" cy="450" rx="300" ry="80" />
+      <ellipse cx="720" cy="450" rx="230" ry="50" />
+      <ellipse cx="720" cy="450" rx="160" ry="28" />
+      <ellipse cx="200" cy="100" rx="320" ry="140" />
+      <ellipse cx="200" cy="100" rx="260" ry="110" />
+      <ellipse cx="200" cy="100" rx="200" ry="80" />
+      <ellipse cx="200" cy="100" rx="140" ry="55" />
+      <ellipse cx="1300" cy="800" rx="280" ry="120" />
+      <ellipse cx="1300" cy="800" rx="220" ry="90" />
+      <ellipse cx="1300" cy="800" rx="160" ry="60" />
+    </g>
+  </svg>
+
+  <!-- Particle Field Canvas -->
+  <canvas id="particle-field"></canvas>
+
+  <!-- Navigation -->
+  <nav>
+    <div class="nav-logo">
+      <span class="brand-from">formerly Servilla</span>
+      <span class="brand-main">Agri<span>vision</span></span>
+    </div>
+    <ul class="nav-links">
+      <li><a href="#features">Plataforma</a></li>
+      <li><a href="#stats">Impacto</a></li>
+      <li><a href="#cta">Contacto</a></li>
+    </ul>
+    <button class="nav-cta">Iniciar sesión</button>
+  </nav>
+
+  <!-- ── HERO ── -->
+  <section class="hero">
+    <div class="hero-left">
+      <div class="hero-badge">
+        <div class="dot"></div>
+        <span>Agrivision · Ahora en beta</span>
+      </div>
+      <p class="hero-eyebrow">Plataforma agroindustrial de datos</p>
+      <h1 class="hero-title">
+        Del <em>campo</em><br>
+        al <strong>consumidor.</strong>
+      </h1>
+      <p class="hero-tagline">
+        Tu campo en datos,<br>tu producto en destino.
+      </p>
+      <div class="hero-actions">
+        <a href="#cta" class="btn-primary">
+          Explorar plataforma
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M1 7h12M7 1l6 6-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </a>
+        <a href="#features" class="btn-secondary">Ver capacidades →</a>
+      </div>
+    </div>
+
+    <div class="hero-right">
+      <div class="orb-container">
+        <div class="orb-ring"></div>
+        <div class="orb-ring"></div>
+        <div class="orb-ring"></div>
+        <div class="orb-core">
+          <div class="orb-data-label">
+            <span class="value" id="live-value">98.4</span>
+            <span class="unit">% entregas exitosas</span>
+          </div>
+        </div>
+        <!-- Floating cards -->
+        <div class="data-card">
+          <div class="card-label">Órdenes hoy</div>
+          <div class="card-value" id="orders-count">2,847</div>
+          <div class="card-trend">↑ 12.3% vs ayer</div>
+          <div class="mini-bar">
+            <span></span><span class="active"></span><span class="active"></span>
+            <span></span><span class="active"></span><span class="active"></span>
+            <span class="active"></span>
+          </div>
+        </div>
+        <div class="data-card">
+          <div class="card-label">Mensajeros activos</div>
+          <div class="card-value">143</div>
+          <div class="card-trend">● En ruta ahora</div>
+        </div>
+        <div class="data-card">
+          <div class="card-label">Zonas cubiertas</div>
+          <div class="card-value">28</div>
+          <div class="card-trend">Bogotá + regiones</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="scroll-indicator">
+      <span>Scroll</span>
+      <div class="scroll-line"></div>
+    </div>
+  </section>
+
+  <!-- Ticker -->
+  <div class="ticker">
+    <div class="ticker-track" id="ticker-track">
+      <div class="ticker-item">
+        <strong>CAMPO → DATOS</strong><span class="sep"></span>
+        Trazabilidad en tiempo real
+        <span class="sep"></span>
+      </div>
+      <div class="ticker-item">
+        <strong>LOGÍSTICA AGRÍCOLA</strong><span class="sep"></span>
+        Última milla inteligente
+        <span class="sep"></span>
+      </div>
+      <div class="ticker-item">
+        <strong>AGRIVISION</strong><span class="sep"></span>
+        Antes Servilla · Evolucionando
+        <span class="sep"></span>
+      </div>
+      <div class="ticker-item">
+        <strong>DASHBOARD MENSAJEROS</strong><span class="sep"></span>
+        Control total de rutas
+        <span class="sep"></span>
+      </div>
+      <div class="ticker-item">
+        <strong>PWA NATIVA</strong><span class="sep"></span>
+        Sin descarga · Sin fricción
+        <span class="sep"></span>
+      </div>
+      <div class="ticker-item">
+        <strong>CAMPO → DATOS</strong><span class="sep"></span>
+        Trazabilidad en tiempo real
+        <span class="sep"></span>
+      </div>
+      <div class="ticker-item">
+        <strong>LOGÍSTICA AGRÍCOLA</strong><span class="sep"></span>
+        Última milla inteligente
+        <span class="sep"></span>
+      </div>
+      <div class="ticker-item">
+        <strong>AGRIVISION</strong><span class="sep"></span>
+        Antes Servilla · Evolucionando
+        <span class="sep"></span>
+      </div>
+      <div class="ticker-item">
+        <strong>DASHBOARD MENSAJEROS</strong><span class="sep"></span>
+        Control total de rutas
+        <span class="sep"></span>
+      </div>
+      <div class="ticker-item">
+        <strong>PWA NATIVA</strong><span class="sep"></span>
+        Sin descarga · Sin fricción
+        <span class="sep"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── FEATURES ── -->
+  <section class="section-features" id="features">
+    <div class="section-header">
+      <div>
+        <p class="section-label">Capacidades de la plataforma</p>
+        <h2 class="section-title">
+          Datos que<br>hacen <em>crecer</em><br>tu operación.
+        </h2>
+      </div>
+      <p class="section-body">
+        Agrivision integra logística de campo, trazabilidad de productos y analytics operacional en una sola plataforma. Diseñada para productores, distribuidores y mensajeros que necesitan precisión en cada kilómetro.
+      </p>
+    </div>
+
+    <div class="features-grid">
+      <div class="feature-card">
+        <span class="feature-num">01</span>
+        <div class="feature-icon">🌾</div>
+        <h3 class="feature-title">Trazabilidad de campo</h3>
+        <p class="feature-desc">Registra el origen de cada producto desde la cosecha hasta la entrega. Escaneo de códigos de barras integrado con geolocalización.</p>
+        <span class="feature-tag">Origen verificable</span>
+      </div>
+
+      <div class="feature-card">
+        <span class="feature-num">02</span>
+        <div class="feature-icon">📦</div>
+        <h3 class="feature-title">Gestión de órdenes</h3>
+        <p class="feature-desc">Procesamiento masivo de órdenes con asignación inteligente a mensajeros. Integración directa con operadores de última milla.</p>
+        <span class="feature-tag">Multi-operador</span>
+      </div>
+
+      <div class="feature-card">
+        <span class="feature-num">03</span>
+        <div class="feature-icon">📊</div>
+        <h3 class="feature-title">Analytics en tiempo real</h3>
+        <p class="feature-desc">Dashboards operacionales para seguimiento de mensajeros, tasas de entrega y rendimiento por zona geográfica.</p>
+        <span class="feature-tag">Decisiones basadas en datos</span>
+      </div>
+
+      <div class="feature-card">
+        <span class="feature-num">04</span>
+        <div class="feature-icon">🗺️</div>
+        <h3 class="feature-title">Estandarización de direcciones</h3>
+        <p class="feature-desc">Motor propio de normalización de direcciones colombianas. Convierte texto libre en coordenadas verificadas con códigos postales.</p>
+        <span class="feature-tag">Cobertura Bogotá + regiones</span>
+      </div>
+
+      <div class="feature-card">
+        <span class="feature-num">05</span>
+        <div class="feature-icon">🚴</div>
+        <h3 class="feature-title">App de mensajeros</h3>
+        <p class="feature-desc">PWA instalable sin tienda de apps. Escáner nativo, reconocimiento de voz para registro de novedades y planillas digitales.</p>
+        <span class="feature-tag">Sin fricción operativa</span>
+      </div>
+
+      <div class="feature-card">
+        <span class="feature-num">06</span>
+        <div class="feature-icon">📋</div>
+        <h3 class="feature-title">Reportes PDF automáticos</h3>
+        <p class="feature-desc">Generación automática de planillas diarias por mensajero, históricos consolidados y reportes de pegado de guías.</p>
+        <span class="feature-tag">Auditoría completa</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── TRANSITION STRIP ── -->
+  <div class="transition-strip">
+    <div class="brand-old">
+      <span class="brand-small-label">Conocido como</span>
+      <span class="brand-name-old">Servilla</span>
+    </div>
+
+    <div class="transition-arrow">
+      <div class="arrow-line"></div>
+      <span class="arrow-label">evolucionando</span>
+    </div>
+
+    <div class="brand-new">
+      <span class="brand-small-label">Ahora es</span>
+      <span class="brand-name-new">Agri<span>vision</span></span>
+    </div>
+
+    <div class="transition-tagline">
+      <blockquote>
+        "Tu campo en datos, <strong>tu producto en destino.</strong>"
+      </blockquote>
+    </div>
+  </div>
+
+  <!-- ── STATS ── -->
+  <div class="section-stats" id="stats">
+    <div class="stat-cell">
+      <span class="stat-value"><span>+</span>50K</span>
+      <span class="stat-label">Órdenes procesadas / mes</span>
+    </div>
+    <div class="stat-cell">
+      <span class="stat-value">98<span>%</span></span>
+      <span class="stat-label">Tasa de entrega exitosa</span>
+    </div>
+    <div class="stat-cell">
+      <span class="stat-value"><span>+</span>200</span>
+      <span class="stat-label">Mensajeros activos</span>
+    </div>
+    <div class="stat-cell">
+      <span class="stat-value">28</span>
+      <span class="stat-label">Zonas geográficas cubiertas</span>
+    </div>
+  </div>
+
+  <!-- ── CTA ── -->
+  <section class="section-cta" id="cta">
+    <div class="cta-bg-text">CAMPO</div>
+    <p class="cta-eyebrow">Únete a la transición</p>
+    <h2 class="cta-title">
+      El campo merece<br>tecnología de <em>primera.</em>
+    </h2>
+    <div class="cta-actions">
+      <a href="#" class="btn-primary btn-large">
+        Solicitar acceso
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M1 7h12M7 1l6 6-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </a>
+      <a href="#" class="btn-secondary">Agendar demo →</a>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <span class="footer-left">© 2025 Agrivision · Antes Servilla</span>
+    <span class="footer-brand">Agri<span>vision</span></span>
+    <span class="footer-right">Tu campo en datos, tu producto en destino.</span>
+  </footer>
+
+  <script>
+    /* ── Custom Cursor ── */
+    const cursor = document.getElementById('cursor');
+    const ring   = document.getElementById('cursor-ring');
+    let mx = 0, my = 0, rx = 0, ry = 0;
+    document.addEventListener('mousemove', e => { mx = e.clientX; my = e.clientY; });
+    function animCursor() {
+      cursor.style.left = mx + 'px';
+      cursor.style.top  = my + 'px';
+      rx += (mx - rx) * 0.14;
+      ry += (my - ry) * 0.14;
+      ring.style.left = rx + 'px';
+      ring.style.top  = ry + 'px';
+      requestAnimationFrame(animCursor);
+    }
+    animCursor();
+    document.querySelectorAll('a, button').forEach(el => {
+      el.addEventListener('mouseenter', () => {
+        cursor.style.width = '18px';
+        cursor.style.height = '18px';
+        ring.style.width = '52px';
+        ring.style.height = '52px';
+        ring.style.opacity = '0.8';
+      });
+      el.addEventListener('mouseleave', () => {
+        cursor.style.width = '10px';
+        cursor.style.height = '10px';
+        ring.style.width = '36px';
+        ring.style.height = '36px';
+        ring.style.opacity = '0.5';
+      });
+    });
+
+    /* ── Particle Field ── */
+    const canvas = document.getElementById('particle-field');
+    const ctx    = canvas.getContext('2d');
+    let W, H, particles = [];
+
+    function resize() {
+      W = canvas.width  = window.innerWidth;
+      H = canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    class Particle {
+      constructor() { this.reset(); }
+      reset() {
+        this.x     = Math.random() * W;
+        this.y     = Math.random() * H;
+        this.size  = Math.random() * 1.5 + 0.3;
+        this.speedX = (Math.random() - 0.5) * 0.18;
+        this.speedY = (Math.random() - 0.5) * 0.18;
+        this.alpha  = Math.random() * 0.4 + 0.05;
+        this.color  = Math.random() > 0.6 ? '#4CAF76' : Math.random() > 0.5 ? '#C8A55A' : '#A8E6BE';
+      }
+      update() {
+        this.x += this.speedX;
+        this.y += this.speedY;
+        if (this.x < 0 || this.x > W || this.y < 0 || this.y > H) this.reset();
+      }
+      draw() {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.globalAlpha = this.alpha;
+        ctx.fill();
+      }
+    }
+
+    for (let i = 0; i < 120; i++) particles.push(new Particle());
+
+    function drawConnections() {
+      for (let i = 0; i < particles.length; i++) {
+        for (let j = i + 1; j < particles.length; j++) {
+          const dx = particles[i].x - particles[j].x;
+          const dy = particles[i].y - particles[j].y;
+          const d  = Math.sqrt(dx*dx + dy*dy);
+          if (d < 80) {
+            ctx.beginPath();
+            ctx.moveTo(particles[i].x, particles[i].y);
+            ctx.lineTo(particles[j].x, particles[j].y);
+            ctx.strokeStyle = '#4CAF76';
+            ctx.globalAlpha = (1 - d/80) * 0.06;
+            ctx.lineWidth = 0.5;
+            ctx.stroke();
+          }
+        }
+      }
+    }
+
+    function animParticles() {
+      ctx.clearRect(0, 0, W, H);
+      ctx.globalAlpha = 1;
+      drawConnections();
+      particles.forEach(p => { p.update(); p.draw(); });
+      requestAnimationFrame(animParticles);
+    }
+    animParticles();
+
+    /* ── Live Counter Animation ── */
+    function animCounter(el, start, end, duration, suffix) {
+      let startTime = null;
+      function step(ts) {
+        if (!startTime) startTime = ts;
+        const progress = Math.min((ts - startTime) / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        el.textContent = (start + (end - start) * eased).toFixed(1) + (suffix||'');
+        if (progress < 1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
+    }
+
+    // Animate hero orb value on load
+    const liveVal = document.getElementById('live-value');
+    setTimeout(() => animCounter(liveVal, 85, 98.4, 2000), 800);
+
+    // Flicker orders count
+    const ordersEl = document.getElementById('orders-count');
+    setInterval(() => {
+      const base = 2847;
+      const delta = Math.floor(Math.random() * 6) - 2;
+      ordersEl.textContent = (base + delta).toLocaleString('es-CO');
+    }, 3000);
+
+    /* ── Intersection Observer for stat counters ── */
+    const statValues = document.querySelectorAll('.stat-value');
+    const statsData = [
+      { start: 0, end: 50, suffix: 'K', prefix: '+' },
+      { start: 80, end: 98, suffix: '%', prefix: '' },
+      { start: 0, end: 200, suffix: '', prefix: '+' },
+      { start: 0, end: 28, suffix: '', prefix: '' }
+    ];
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const idx = Array.from(statValues).indexOf(entry.target);
+          if (idx >= 0) {
+            const d = statsData[idx];
+            const span = entry.target.querySelector('span');
+            const innerEl = entry.target;
+            let startTime = null;
+            function step(ts) {
+              if (!startTime) startTime = ts;
+              const progress = Math.min((ts - startTime) / 1600, 1);
+              const eased = 1 - Math.pow(1 - progress, 3);
+              const val = Math.floor(d.start + (d.end - d.start) * eased);
+              innerEl.innerHTML = `${span ? '<span>' + span.textContent + '</span>' : ''}${val}${d.suffix ? '<span>' + d.suffix + '</span>' : ''}`;
+              if (progress < 1) requestAnimationFrame(step);
+            }
+            requestAnimationFrame(step);
+          }
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.5 });
+
+    statValues.forEach(el => observer.observe(el));
+  </script>
+</body>
+</html>

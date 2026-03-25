@@ -1888,11 +1888,10 @@ with tab7:
                         cursor_ins = conn.cursor()
                         cursor_ins.execute("""
                             INSERT INTO gastos_administrativos
-                                (fecha, categoria, descripcion, monto, estado, empresa, numero_factura_ext)
-                            VALUES (%s, %s, %s, %s, 'pendiente', %s, %s)
+                                (fecha, categoria, descripcion, monto, estado, proveedor, numero_factura, observaciones)
+                            VALUES (%s, 'otros', %s, %s, 'pendiente', %s, %s, 'Adelanto Dueño')
                         """, (
                             ad_fecha,
-                            "Adelanto Dueño",
                             descripcion_bd,
                             ad_monto,
                             ad_empresa.strip(),
@@ -1924,9 +1923,9 @@ with tab7:
         }[filtro_ad]
 
         cursor_t7.execute(f"""
-            SELECT id, fecha, empresa, numero_factura_ext, descripcion, monto, estado
+            SELECT id, fecha, proveedor AS empresa, numero_factura AS numero_factura_ext, descripcion, monto, estado
             FROM gastos_administrativos
-            WHERE categoria = 'Adelanto Dueño' {where_ad}
+            WHERE observaciones = 'Adelanto Dueño' {where_ad}
             ORDER BY fecha DESC
             LIMIT 200
         """)

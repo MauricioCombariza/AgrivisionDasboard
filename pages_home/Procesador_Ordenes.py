@@ -16,19 +16,19 @@ from pathlib import Path
 
 
 def conectar_db():
-    """Conecta a la base de datos sin cache para evitar problemas de conexión expirada"""
+    """Conecta a la BD logistica local (localhost). Los datos se sincronizan con el VPS luego."""
     try:
         conn = mysql.connector.connect(
-            host=os.environ.get("DB_HOST", "localhost"),
+            host="localhost",
             user=os.environ.get("DB_USER", "root"),
-            password=os.environ.get("DB_PASSWORD", ""),
+            password="",
             database="logistica",
             autocommit=False,
             connect_timeout=10
         )
         return conn
     except Exception as e:
-        st.error(f"Error conectando a BD: {e}")
+        st.error(f"Error conectando a BD local: {e}")
         return None
 
 def obtener_conexion():

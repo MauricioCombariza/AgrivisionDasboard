@@ -13,7 +13,6 @@ load_dotenv()
 import time
 import subprocess
 from urllib.parse import quote
-import mysql.connector
 from PIL import Image
 
 # Dirnum: estandarización y localidad
@@ -176,77 +175,28 @@ def enviar_mensaje_whatsapp(numero, mensaje):
         return False
 
 # ----------------------------
-# 🗃 MÓDULO MYSQL
+# 🗃 BASE LOCAL (MySQL localhost)
 # ----------------------------
-def conectar_mysql():
-    """Conexión con pool de conexiones"""
-    try:
-        # Detectar si estamos en WSL2
-        import platform
-        is_wsl = 'microsoft' in platform.uname().release.lower()
-
-        # Si estamos en WSL2, intentar conectar a MySQL de Windows
-        if is_wsl:
-            import subprocess
-            try:
-                # Obtener IP de Windows desde WSL2
-                result = subprocess.run(
-                    ["ip", "route", "show"],
-                    capture_output=True,
-                    text=True
-                )
-                windows_ip = None
-                for line in result.stdout.split('\n'):
-                    if 'default' in line:
-                        windows_ip = line.split()[2]
-                        break
-
-                # Intentar conectar a Windows primero
-                if windows_ip:
-                    try:
-                        return mysql.connector.connect(
-                            host=windows_ip,
-                            user="root",
-                            password=os.environ.get("DB_PASSWORD", ""),
-                            database="imile",
-                            pool_size=3
-                        )
-                    except:
-                        pass  # Si falla, intentar localhost
-            except:
-                pass
-
-        # Intentar localhost (WSL2 o Windows nativo)
-        return mysql.connector.connect(
-            host=os.environ.get("DB_HOST", "localhost"),
-            user=os.environ.get("DB_USER", "root"),
-            password=os.environ.get("DB_PASSWORD", ""),
-            database="imile",
-            pool_size=3
-        )
-    except Exception as e:
-        st.error("Error de conexión a MySQL")
-        return None
+import mysql.connector as _mc
 
 def buscar_datos_por_serial(serial):
-    """Búsqueda con manejo completo de errores"""
-    conn = None
+    """Busca el serial en la BD local imile (localhost)."""
     try:
-        conn = conectar_mysql()
-        if not conn:
-            return None
-            
-        with conn.cursor(dictionary=True) as cursor:
-            query = "SELECT nombre, direccion, telefono, serial FROM paquetes WHERE serial = %s LIMIT 1"
-            cursor.execute(query, (str(serial).strip(),))
-            return cursor.fetchone()
-            
-    except Exception as e:
-        st.error("Error al buscar datos")
+        conn = _mc.connect(host="localhost", user="root", password="", database="imile")
+        with conn.cursor(dictionary=True) as cur:
+            cur.execute(
+                "SELECT serial, nombre, direccion, telefono "
+                "FROM paquetes WHERE serial = %s LIMIT 1",
+                (str(serial).strip(),),
+            )
+            return cur.fetchone()
+    except Exception:
         return None
     finally:
-        if conn and conn.is_connected():
+        try:
             conn.close()
+        except Exception:
+            pass
 
 # ----------------------------
 # 🖥 INTERFAZ PRINCIPAL

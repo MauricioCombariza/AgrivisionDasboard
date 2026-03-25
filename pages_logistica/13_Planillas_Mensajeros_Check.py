@@ -4,14 +4,19 @@ from datetime import date
 import sys
 import os
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.db_connection import conectar_logistica
-
+import mysql.connector
 
 st.title("📑 Planillas Mensajeros Check")
 
-conn = conectar_logistica()
-if not conn:
+try:
+    conn = mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="",
+        database="logistica",
+    )
+except Exception as e:
+    st.error(f"Error conectando a BD local: {e}")
     st.stop()
 
 # Inicializar estado para edicion

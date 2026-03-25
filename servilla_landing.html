@@ -1,0 +1,1198 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Servilla — Distribución local. Escala global.</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,300;0,400;0,600;0,700;0,800;0,900;1,300;1,700;1,900&family=Barlow:wght@300;400;500;600&family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+
+  <style>
+    /* ── Reset ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+
+    /* ── Design Tokens ── */
+    :root {
+      --black:   #080808;
+      --near:    #111111;
+      --dark:    #1A1A1A;
+      --mid:     #2E2E2E;
+      --border:  #2A2A2A;
+      --lime:    #C8F135;   /* electric speed */
+      --orange:  #FF4D1C;   /* urgency */
+      --cream:   #F0EDE6;
+      --muted:   #888888;
+      --dimmed:  #444444;
+      --white:   #FAFAF8;
+      --ff-head: 'Barlow Condensed', sans-serif;
+      --ff-body: 'Barlow', sans-serif;
+      --ff-mono: 'IBM Plex Mono', monospace;
+    }
+
+    body {
+      font-family: var(--ff-body);
+      background: var(--black);
+      color: var(--cream);
+      overflow-x: hidden;
+      cursor: none;
+    }
+
+    /* ── Cursor ── */
+    #cur { position:fixed; width:8px; height:8px; background:var(--lime); border-radius:50%; pointer-events:none; z-index:9999; transform:translate(-50%,-50%); transition:width .2s,height .2s; }
+    #cur-r { position:fixed; width:32px; height:32px; border:1px solid rgba(200,241,53,0.4); border-radius:50%; pointer-events:none; z-index:9998; transform:translate(-50%,-50%); transition:all .22s cubic-bezier(.17,.67,.45,1.2); }
+    a:hover ~ #cur, button:hover ~ #cur { width:14px; height:14px; }
+
+    /* ── Nav ── */
+    nav {
+      position: fixed; top:0; left:0; right:0; z-index:200;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 1.4rem 3rem;
+      border-bottom: 1px solid transparent;
+      transition: border-color .3s, background .3s, backdrop-filter .3s;
+    }
+    nav.scrolled {
+      border-color: var(--border);
+      background: rgba(8,8,8,0.92);
+      backdrop-filter: blur(16px);
+    }
+    .logo {
+      font-family: var(--ff-head);
+      font-weight: 900;
+      font-size: 1.7rem;
+      letter-spacing: 0.05em;
+      color: var(--white);
+      text-transform: uppercase;
+      text-decoration: none;
+    }
+    .logo em { font-style: normal; color: var(--lime); }
+
+    .nav-center {
+      display: flex; gap: 2.5rem; list-style: none;
+    }
+    .nav-center a {
+      font-family: var(--ff-mono); font-size: .68rem;
+      letter-spacing: .18em; text-transform: uppercase;
+      color: var(--muted); text-decoration: none;
+      transition: color .2s; cursor: none;
+    }
+    .nav-center a:hover { color: var(--cream); }
+
+    .nav-right { display:flex; gap:1rem; align-items:center; }
+    .btn-ghost {
+      font-family: var(--ff-mono); font-size:.68rem;
+      letter-spacing:.15em; text-transform:uppercase;
+      color: var(--muted); background:none; border:1px solid var(--border);
+      padding: .55rem 1.2rem; cursor:none;
+      transition: color .2s, border-color .2s;
+    }
+    .btn-ghost:hover { color:var(--cream); border-color:var(--dimmed); }
+    .btn-lime {
+      font-family: var(--ff-mono); font-size:.68rem;
+      letter-spacing:.15em; text-transform:uppercase;
+      color: var(--black); background:var(--lime); border:none;
+      padding: .55rem 1.4rem; cursor:none;
+      transition: background .2s, transform .15s;
+    }
+    .btn-lime:hover { background: #d8ff50; transform: translateY(-1px); }
+
+    /* ── HERO ── */
+    .hero {
+      position: relative;
+      min-height: 100vh;
+      display: flex; flex-direction: column;
+      justify-content: flex-end;
+      padding: 0 3rem 4rem;
+      overflow: hidden;
+    }
+
+    /* Diagonal split background */
+    .hero-bg {
+      position: absolute; inset: 0; z-index: 0;
+      overflow: hidden;
+    }
+    .hero-bg-old {
+      position: absolute;
+      top:0; left:0;
+      width: 52%; height: 100%;
+      background: #0E0E0E;
+    }
+    .hero-bg-new {
+      position: absolute;
+      top:0; right:0;
+      width: 52%; height: 100%;
+      background: #0E0E0E;
+    }
+    .hero-diagonal {
+      position: absolute; inset: 0;
+      background: linear-gradient(105deg,
+        #0E0E0E 0%,
+        #0E0E0E 46%,
+        var(--lime) 46%,
+        var(--lime) 47.5%,
+        #0C0C0C 47.5%,
+        #0C0C0C 100%
+      );
+      z-index: 1;
+    }
+
+    /* Grid lines */
+    .hero-grid {
+      position: absolute; inset: 0; z-index: 2;
+      background-image:
+        linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+      background-size: 80px 80px;
+      mask-image: linear-gradient(to bottom, transparent 0%, black 20%, black 80%, transparent 100%);
+    }
+
+    .hero-content {
+      position: relative; z-index: 10;
+    }
+
+    /* Eyebrow */
+    .hero-eyebrow {
+      display: flex; align-items: center; gap: 1rem;
+      margin-bottom: 2rem;
+    }
+    .eyebrow-line {
+      width: 40px; height: 1px; background: var(--lime);
+    }
+    .eyebrow-text {
+      font-family: var(--ff-mono); font-size:.65rem;
+      letter-spacing:.25em; text-transform:uppercase;
+      color: var(--lime);
+    }
+    .eyebrow-badge {
+      margin-left:auto;
+      border:1px solid var(--border);
+      padding: .3rem .8rem;
+      font-family: var(--ff-mono); font-size:.6rem;
+      letter-spacing:.15em; text-transform:uppercase;
+      color: var(--muted);
+    }
+
+    /* Main headline */
+    .hero-headline {
+      font-family: var(--ff-head);
+      font-weight: 900;
+      text-transform: uppercase;
+      line-height: 0.88;
+      letter-spacing: -0.01em;
+    }
+    .hl-1 {
+      font-size: clamp(5rem, 12vw, 13rem);
+      color: var(--white);
+      display: block;
+    }
+    .hl-2 {
+      font-size: clamp(5rem, 12vw, 13rem);
+      color: transparent;
+      -webkit-text-stroke: 1px var(--dimmed);
+      display: block;
+      position: relative;
+    }
+    /* strikethrough on old */
+    .hl-2::after {
+      content: '';
+      position: absolute;
+      top: 50%; left: 0;
+      width: 100%; height: 3px;
+      background: var(--orange);
+      transform: scaleX(0);
+      transform-origin: left;
+      animation: strikethrough 0.8s cubic-bezier(.77,0,.18,1) 1.6s forwards;
+    }
+    @keyframes strikethrough {
+      to { transform: scaleX(1); }
+    }
+    .hl-3 {
+      font-size: clamp(5rem, 12vw, 13rem);
+      color: var(--lime);
+      display: block;
+    }
+
+    /* Hero sub + columns */
+    .hero-sub {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 3rem;
+      margin-top: 3rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+    }
+    .hero-sub-item {}
+    .hero-sub-label {
+      font-family: var(--ff-mono); font-size:.58rem;
+      letter-spacing:.2em; text-transform:uppercase;
+      color: var(--muted); margin-bottom:.5rem;
+    }
+    .hero-sub-value {
+      font-family: var(--ff-head); font-size:1.5rem; font-weight:700;
+      color: var(--cream); letter-spacing:.02em;
+    }
+    .hero-sub-value em {
+      font-style:normal; color:var(--lime);
+    }
+
+    /* Floating envelope → package */
+    .hero-float {
+      position: absolute;
+      top: 50%; right: 8%;
+      transform: translateY(-50%);
+      z-index: 8;
+      text-align: center;
+    }
+    .float-old {
+      font-size: 4rem;
+      opacity: .15;
+      display: block;
+      animation: fade-old 0.6s ease 1.8s forwards;
+    }
+    @keyframes fade-old {
+      to { opacity:0; transform:translateY(-20px) scale(0.7); }
+    }
+    .float-arrow {
+      font-family: var(--ff-head);
+      font-size: 1.8rem; font-weight:300;
+      color: var(--lime);
+      display: block;
+      opacity:0;
+      animation: appear 0.4s ease 2.4s forwards;
+    }
+    .float-new {
+      font-size: 5rem;
+      display: block;
+      opacity:0;
+      animation: appear-big 0.6s cubic-bezier(.17,.67,.45,1.6) 2.6s forwards;
+      filter: drop-shadow(0 0 40px rgba(200,241,53,0.3));
+    }
+    @keyframes appear {
+      to { opacity: 1; }
+    }
+    @keyframes appear-big {
+      from { opacity:0; transform: scale(0.5); }
+      to { opacity:1; transform: scale(1); }
+    }
+
+    /* Scroll line */
+    .scroll-cue {
+      position: absolute; bottom:2rem; left:3rem; z-index:10;
+      display:flex; align-items:center; gap:1rem;
+    }
+    .scroll-cue span {
+      font-family:var(--ff-mono); font-size:.58rem;
+      letter-spacing:.2em; text-transform:uppercase;
+      color:var(--muted); writing-mode:vertical-rl;
+    }
+    .scroll-bar {
+      width:1px; height:50px;
+      background:linear-gradient(to bottom, var(--lime), transparent);
+      animation: scroll-extend 2s ease-in-out infinite;
+    }
+    @keyframes scroll-extend {
+      0%,100% { transform:scaleY(1) translateY(0); opacity:.6; }
+      50% { transform:scaleY(0.5) translateY(12px); opacity:1; }
+    }
+
+    /* ── MARQUEE ── */
+    .marquee-wrap {
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      background: var(--near);
+      overflow: hidden; padding: .85rem 0;
+    }
+    .marquee-track {
+      display:flex; white-space:nowrap;
+      animation: marquee 24s linear infinite;
+    }
+    @keyframes marquee {
+      from { transform:translateX(0); }
+      to   { transform:translateX(-50%); }
+    }
+    .marquee-item {
+      display:inline-flex; align-items:center; gap:1.5rem;
+      padding:0 2.5rem;
+      font-family:var(--ff-head); font-size:1.05rem; font-weight:700;
+      letter-spacing:.12em; text-transform:uppercase;
+      color:var(--dimmed);
+    }
+    .marquee-item .dot { width:5px;height:5px; background:var(--orange); border-radius:50%; }
+    .marquee-item.accent { color:var(--lime); }
+
+    /* ── SECTION: THE SHIFT ── */
+    .section-shift {
+      padding: 8rem 3rem;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6rem;
+      align-items: center;
+    }
+    .shift-left {}
+    .shift-tag {
+      font-family:var(--ff-mono); font-size:.62rem;
+      letter-spacing:.25em; text-transform:uppercase;
+      color:var(--orange); margin-bottom:1.5rem;
+    }
+    .shift-title {
+      font-family:var(--ff-head); font-weight:800;
+      font-size: clamp(2.8rem, 4vw, 4.5rem);
+      text-transform:uppercase; line-height:.95;
+      color:var(--white); letter-spacing:-.01em;
+      margin-bottom:2rem;
+    }
+    .shift-title span { color:var(--lime); }
+    .shift-body {
+      font-size:.93rem; color:var(--muted);
+      line-height:1.85; max-width:40ch;
+      margin-bottom:2.5rem;
+    }
+    .shift-body strong { color:var(--cream); font-weight:500; }
+
+    .shift-cta {
+      display:inline-flex; align-items:center; gap:.7rem;
+      font-family:var(--ff-mono); font-size:.7rem;
+      letter-spacing:.15em; text-transform:uppercase;
+      color:var(--black); background:var(--lime);
+      padding:.8rem 1.8rem; text-decoration:none; cursor:none;
+      transition:background .2s, transform .15s;
+    }
+    .shift-cta:hover { background:#d8ff50; transform:translateY(-2px); }
+    .shift-cta svg { transition:transform .2s; }
+    .shift-cta:hover svg { transform:translateX(3px); }
+
+    /* Timeline cards */
+    .shift-right {}
+    .timeline {
+      display:flex; flex-direction:column; gap:0;
+      border-left: 1px solid var(--border);
+      padding-left:2.5rem;
+      margin-left: 1rem;
+    }
+    .tl-item {
+      padding-bottom:2.5rem;
+      position:relative;
+    }
+    .tl-item::before {
+      content:'';
+      position:absolute;
+      left: -2.5rem; top:6px;
+      width:9px; height:9px;
+      border-radius:50%;
+      background:var(--dark);
+      border:1px solid var(--border);
+      transform:translateX(-4px);
+      transition:background .3s, border-color .3s;
+    }
+    .tl-item:hover::before { background:var(--lime); border-color:var(--lime); }
+    .tl-item.active::before { background:var(--lime); border-color:var(--lime);
+      box-shadow: 0 0 12px rgba(200,241,53,.5); }
+    .tl-year {
+      font-family:var(--ff-mono); font-size:.58rem;
+      letter-spacing:.2em; color:var(--muted);
+      margin-bottom:.4rem;
+    }
+    .tl-title {
+      font-family:var(--ff-head); font-weight:700;
+      font-size:1.25rem; text-transform:uppercase;
+      color:var(--cream); margin-bottom:.4rem; letter-spacing:.03em;
+    }
+    .tl-item.active .tl-title { color:var(--lime); }
+    .tl-desc {
+      font-size:.82rem; color:var(--muted); line-height:1.7;
+    }
+
+    /* ── STATS STRIP ── */
+    .stats-strip {
+      display:grid; grid-template-columns:repeat(4,1fr);
+      border-top:1px solid var(--border);
+      border-bottom:1px solid var(--border);
+    }
+    .stat-item {
+      padding:3.5rem 2.5rem;
+      border-right:1px solid var(--border);
+      position:relative; overflow:hidden;
+      transition:background .3s;
+    }
+    .stat-item:last-child { border-right:none; }
+    .stat-item::after {
+      content:'';
+      position:absolute; inset:0;
+      background:var(--lime);
+      transform:scaleY(0);
+      transform-origin:bottom;
+      z-index:0;
+      transition:transform .4s cubic-bezier(.77,0,.18,1);
+    }
+    .stat-item:hover::after { transform:scaleY(1); }
+    .stat-inner { position:relative; z-index:1; }
+    .stat-item:hover .stat-num { color:var(--black); }
+    .stat-item:hover .stat-lbl { color:var(--black); opacity:.7; }
+    .stat-num {
+      font-family:var(--ff-head); font-weight:900;
+      font-size:3.8rem; line-height:1;
+      color:var(--white); letter-spacing:-.02em;
+      transition:color .4s;
+    }
+    .stat-num sup { font-size:1.5rem; vertical-align:super; }
+    .stat-lbl {
+      font-family:var(--ff-mono); font-size:.6rem;
+      letter-spacing:.18em; text-transform:uppercase;
+      color:var(--muted); margin-top:.6rem;
+      transition:color .4s;
+    }
+
+    /* ── HOW IT WORKS ── */
+    .section-how {
+      padding:8rem 3rem;
+    }
+    .how-header {
+      display:flex; justify-content:space-between; align-items:flex-end;
+      margin-bottom:5rem;
+    }
+    .how-title {
+      font-family:var(--ff-head); font-weight:900;
+      font-size:clamp(2.5rem,4vw,4.8rem);
+      text-transform:uppercase; line-height:.92;
+      color:var(--white);
+    }
+    .how-title span { color:var(--lime); }
+    .how-desc {
+      max-width:28ch; font-size:.88rem;
+      color:var(--muted); line-height:1.8;
+      text-align:right;
+    }
+
+    .how-flow {
+      display:grid; grid-template-columns:1fr auto 1fr auto 1fr;
+      gap:0; align-items:start;
+    }
+    .flow-step {
+      padding:2.5rem;
+      background:var(--near);
+      border:1px solid var(--border);
+      position:relative;
+      transition:border-color .3s, background .3s;
+    }
+    .flow-step:hover {
+      border-color: var(--lime);
+      background:rgba(200,241,53,.04);
+    }
+    .flow-arrow {
+      display:flex; align-items:center; justify-content:center;
+      padding:0 1rem; padding-top:3.5rem;
+      color:var(--dimmed); font-size:1.5rem;
+    }
+    .step-num {
+      font-family:var(--ff-mono); font-size:.58rem;
+      letter-spacing:.2em; color:var(--muted);
+      margin-bottom:1.5rem;
+    }
+    .step-icon { font-size:2rem; margin-bottom:1rem; display:block; }
+    .step-title {
+      font-family:var(--ff-head); font-weight:700;
+      font-size:1.4rem; text-transform:uppercase;
+      color:var(--cream); letter-spacing:.03em;
+      margin-bottom:.75rem;
+    }
+    .step-body {
+      font-size:.82rem; color:var(--muted); line-height:1.7;
+    }
+    .step-tag {
+      display:inline-block; margin-top:1.5rem;
+      font-family:var(--ff-mono); font-size:.55rem;
+      letter-spacing:.15em; text-transform:uppercase;
+      color:var(--lime);
+    }
+
+    /* ── COMPANIES STRIP ── */
+    .section-companies {
+      padding:5rem 3rem;
+      border-top:1px solid var(--border);
+      border-bottom:1px solid var(--border);
+    }
+    .companies-header {
+      display:flex; align-items:center; gap:2rem;
+      margin-bottom:3rem;
+    }
+    .companies-label {
+      font-family:var(--ff-mono); font-size:.62rem;
+      letter-spacing:.22em; text-transform:uppercase;
+      color:var(--muted); white-space:nowrap;
+    }
+    .companies-line { flex:1; height:1px; background:var(--border); }
+
+    .companies-grid {
+      display:grid; grid-template-columns:repeat(6,1fr);
+      gap:1px; background:var(--border);
+    }
+    .company-cell {
+      background:var(--near);
+      padding:1.8rem;
+      display:flex; flex-direction:column;
+      align-items:center; justify-content:center; gap:.5rem;
+      transition:background .2s;
+    }
+    .company-cell:hover { background:var(--dark); }
+    .company-icon { font-size:1.6rem; }
+    .company-name {
+      font-family:var(--ff-mono); font-size:.58rem;
+      letter-spacing:.12em; text-transform:uppercase;
+      color:var(--dimmed);
+    }
+
+    /* ── HERO BOTTOM: THE PROPOSITION ── */
+    .section-prop {
+      padding:8rem 3rem;
+      position:relative; overflow:hidden;
+    }
+    .prop-bg-text {
+      position:absolute; top:50%; left:50%;
+      transform:translate(-50%,-50%);
+      font-family:var(--ff-head); font-weight:900;
+      font-size:20vw; text-transform:uppercase;
+      color:rgba(200,241,53,.03);
+      white-space:nowrap; pointer-events:none;
+      letter-spacing:-.03em;
+    }
+    .prop-inner {
+      position:relative; z-index:1;
+      max-width:900px; margin:0 auto; text-align:center;
+    }
+    .prop-tag {
+      font-family:var(--ff-mono); font-size:.62rem;
+      letter-spacing:.25em; text-transform:uppercase;
+      color:var(--orange); margin-bottom:1.5rem;
+    }
+    .prop-title {
+      font-family:var(--ff-head); font-weight:900;
+      font-size:clamp(3rem,7vw,8rem);
+      text-transform:uppercase; line-height:.9;
+      letter-spacing:-.02em; color:var(--white);
+      margin-bottom:2rem;
+    }
+    .prop-title .accent { color:var(--lime); }
+    .prop-title .outline {
+      color:transparent;
+      -webkit-text-stroke:1px rgba(255,255,255,.2);
+    }
+    .prop-sub {
+      font-size:1rem; color:var(--muted); line-height:1.8;
+      max-width:50ch; margin:0 auto 3rem;
+    }
+    .prop-sub strong { color:var(--cream); }
+    .prop-actions {
+      display:flex; gap:1.5rem; justify-content:center; align-items:center;
+    }
+    .btn-big {
+      padding:1rem 2.8rem;
+      font-family:var(--ff-mono); font-size:.72rem;
+      letter-spacing:.15em; text-transform:uppercase;
+      cursor:none; transition:all .2s; text-decoration:none;
+      display:inline-flex; align-items:center; gap:.6rem;
+    }
+    .btn-big.lime { color:var(--black); background:var(--lime); border:none; }
+    .btn-big.lime:hover { background:#d8ff50; transform:translateY(-2px); box-shadow:0 12px 40px rgba(200,241,53,.25); }
+    .btn-big.outline { color:var(--cream); background:none; border:1px solid var(--border); }
+    .btn-big.outline:hover { border-color:var(--cream); }
+
+    /* ── COVERAGE MAP ── */
+    .section-coverage {
+      padding:6rem 3rem;
+      border-top:1px solid var(--border);
+      display:grid; grid-template-columns:1fr 1fr;
+      gap:6rem; align-items:center;
+    }
+    .cov-left {}
+    .cov-tag {
+      font-family:var(--ff-mono); font-size:.62rem;
+      letter-spacing:.25em; text-transform:uppercase;
+      color:var(--lime); margin-bottom:1.2rem;
+    }
+    .cov-title {
+      font-family:var(--ff-head); font-weight:900;
+      font-size:clamp(2.5rem,3.5vw,4rem);
+      text-transform:uppercase; line-height:.92;
+      color:var(--white); margin-bottom:1.5rem;
+    }
+    .cov-title span { color:var(--lime); }
+    .cov-body {
+      font-size:.9rem; color:var(--muted);
+      line-height:1.8; max-width:38ch; margin-bottom:2.5rem;
+    }
+    .cov-zones {
+      display:grid; grid-template-columns:1fr 1fr;
+      gap:1px; background:var(--border);
+    }
+    .cov-zone {
+      background:var(--near);
+      padding:1rem 1.2rem;
+      display:flex; align-items:center; gap:.75rem;
+      transition:background .2s;
+    }
+    .cov-zone:hover { background:var(--dark); }
+    .cov-zone-dot { width:6px;height:6px; background:var(--lime); border-radius:50%; flex-shrink:0; }
+    .cov-zone-name {
+      font-family:var(--ff-mono); font-size:.62rem;
+      letter-spacing:.1em; color:var(--muted);
+    }
+
+    /* Bogota Grid visual */
+    .cov-right {}
+    .city-grid {
+      display:grid; grid-template-columns:repeat(10,1fr);
+      gap:4px;
+    }
+    .grid-cell {
+      aspect-ratio:1;
+      background:var(--mid);
+      border-radius:2px;
+      transition:background .3s, transform .3s;
+    }
+    .grid-cell.active { background:var(--lime); }
+    .grid-cell.semi { background:rgba(200,241,53,.35); }
+    .grid-cell.hot { background:var(--orange); }
+
+    /* ── CTA SECTION ── */
+    .section-cta {
+      padding:8rem 3rem;
+      background: linear-gradient(135deg, #0A0A0A 0%, #0F160A 50%, #0A0A0A 100%);
+      border-top:1px solid var(--border);
+      text-align:center; position:relative; overflow:hidden;
+    }
+    .cta-rings {
+      position:absolute; top:50%; left:50%;
+      transform:translate(-50%,-50%);
+      pointer-events:none;
+    }
+    .cta-ring {
+      position:absolute;
+      border-radius:50%;
+      border:1px solid rgba(200,241,53,.06);
+      transform:translate(-50%,-50%);
+    }
+    .cta-ring:nth-child(1) { width:300px;height:300px; }
+    .cta-ring:nth-child(2) { width:550px;height:550px; }
+    .cta-ring:nth-child(3) { width:800px;height:800px; animation:spin-slow 40s linear infinite; }
+    @keyframes spin-slow { to { transform:translate(-50%,-50%) rotate(360deg); } }
+    .cta-content { position:relative; z-index:1; }
+    .cta-pre {
+      font-family:var(--ff-mono); font-size:.62rem;
+      letter-spacing:.25em; text-transform:uppercase;
+      color:var(--muted); margin-bottom:1.5rem;
+    }
+    .cta-title {
+      font-family:var(--ff-head); font-weight:900;
+      font-size:clamp(3rem,6vw,7rem);
+      text-transform:uppercase; line-height:.9;
+      letter-spacing:-.02em; color:var(--white);
+      margin-bottom:2rem;
+    }
+    .cta-title .accent { color:var(--lime); }
+    .cta-sub {
+      font-size:.93rem; color:var(--muted);
+      max-width:44ch; margin:0 auto 3rem;
+      line-height:1.8;
+    }
+
+    /* ── FOOTER ── */
+    footer {
+      border-top:1px solid var(--border);
+      padding:2.5rem 3rem;
+      display:grid; grid-template-columns:1fr auto 1fr;
+      align-items:center; background:var(--black);
+    }
+    .footer-copy {
+      font-family:var(--ff-mono); font-size:.58rem;
+      letter-spacing:.12em; color:var(--dimmed);
+    }
+    .footer-brand {
+      font-family:var(--ff-head); font-weight:900;
+      font-size:1.4rem; text-transform:uppercase;
+      color:var(--white); letter-spacing:.05em;
+    }
+    .footer-brand em { font-style:normal; color:var(--lime); }
+    .footer-right {
+      text-align:right;
+      font-family:var(--ff-mono); font-size:.58rem;
+      letter-spacing:.1em; color:var(--dimmed);
+    }
+
+    /* ── Entrance Animations ── */
+    @keyframes fade-up {
+      from { opacity:0; transform:translateY(30px); }
+      to   { opacity:1; transform:translateY(0); }
+    }
+    .hero-eyebrow { animation:fade-up .5s ease both .2s; }
+    .hl-1 { animation:fade-up .6s ease both .4s; }
+    .hl-2 { animation:fade-up .6s ease both .55s; }
+    .hl-3 { animation:fade-up .6s ease both .7s; }
+    .hero-sub { animation:fade-up .6s ease both .9s; }
+
+    /* ── Responsive ── */
+    @media (max-width: 900px) {
+      nav { padding:1rem 1.5rem; }
+      .nav-center { display:none; }
+      .hero { padding:0 1.5rem 3rem; }
+      .hero-float { display:none; }
+      .section-shift,
+      .section-coverage { grid-template-columns:1fr; gap:3rem; }
+      .how-flow { grid-template-columns:1fr; }
+      .flow-arrow { display:none; }
+      .stats-strip,
+      .companies-grid { grid-template-columns:1fr 1fr; }
+      .section-how,
+      .section-prop,
+      .section-cta,
+      .section-shift,
+      .section-coverage { padding:4rem 1.5rem; }
+      .how-header { flex-direction:column; align-items:flex-start; gap:1rem; }
+      .how-desc { text-align:left; }
+      footer { grid-template-columns:1fr; text-align:center; gap:1rem; }
+      .footer-right { text-align:center; }
+    }
+  </style>
+</head>
+<body>
+
+  <div id="cur"></div>
+  <div id="cur-r"></div>
+
+  <!-- ═══════════════ NAV ═══════════════ -->
+  <nav id="main-nav">
+    <a href="#" class="logo">Ser<em>villa</em></a>
+    <ul class="nav-center">
+      <li><a href="#shift">Transformación</a></li>
+      <li><a href="#how">Cómo funciona</a></li>
+      <li><a href="#coverage">Cobertura</a></li>
+      <li><a href="#cta">Únete</a></li>
+    </ul>
+    <div class="nav-right">
+      <button class="btn-ghost">Ingresa</button>
+      <button class="btn-lime">Empezar ahora</button>
+    </div>
+  </nav>
+
+  <!-- ═══════════════ HERO ═══════════════ -->
+  <section class="hero">
+    <div class="hero-bg">
+      <div class="hero-diagonal"></div>
+      <div class="hero-grid"></div>
+    </div>
+
+    <!-- Floating transformation visual -->
+    <div class="hero-float">
+      <span class="float-old">✉️</span>
+      <span class="float-arrow">→</span>
+      <span class="float-new">📦</span>
+    </div>
+
+    <div class="scroll-cue">
+      <div class="scroll-bar"></div>
+      <span>Scroll</span>
+    </div>
+
+    <div class="hero-content">
+      <div class="hero-eyebrow">
+        <div class="eyebrow-line"></div>
+        <span class="eyebrow-text">Distribución local · Escala global</span>
+        <span class="eyebrow-badge">Nueva era · 2025</span>
+      </div>
+
+      <h1 class="hero-headline">
+        <span class="hl-1">Bogotá</span>
+        <span class="hl-2">sobre a sobre</span>
+        <span class="hl-3">paquete en destino.</span>
+      </h1>
+
+      <div class="hero-sub">
+        <div class="hero-sub-item">
+          <p class="hero-sub-label">Tiempo promedio de entrega</p>
+          <p class="hero-sub-value"><em>&lt; 24h</em> en ciudad</p>
+        </div>
+        <div class="hero-sub-item">
+          <p class="hero-sub-label">Empresas internacionales servidas</p>
+          <p class="hero-sub-value"><em>+50</em> marcas globales</p>
+        </div>
+        <div class="hero-sub-item">
+          <p class="hero-sub-label">La nueva Servilla</p>
+          <p class="hero-sub-value">Local, <em>rápida</em>, digital.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ MARQUEE ═══════════════ -->
+  <div class="marquee-wrap">
+    <div class="marquee-track">
+      <div class="marquee-item"><span class="dot"></span> Última milla inteligente</div>
+      <div class="marquee-item accent"><span class="dot"></span> Servilla 2.0</div>
+      <div class="marquee-item"><span class="dot"></span> De sobre a paquete</div>
+      <div class="marquee-item"><span class="dot"></span> Global brands · Local speed</div>
+      <div class="marquee-item accent"><span class="dot"></span> Bogotá primero</div>
+      <div class="marquee-item"><span class="dot"></span> Trazabilidad en tiempo real</div>
+      <div class="marquee-item"><span class="dot"></span> Distribución reinventada</div>
+      <div class="marquee-item accent"><span class="dot"></span> Tu ciudad, nuestro territorio</div>
+      <div class="marquee-item"><span class="dot"></span> Última milla inteligente</div>
+      <div class="marquee-item accent"><span class="dot"></span> Servilla 2.0</div>
+      <div class="marquee-item"><span class="dot"></span> De sobre a paquete</div>
+      <div class="marquee-item"><span class="dot"></span> Global brands · Local speed</div>
+      <div class="marquee-item accent"><span class="dot"></span> Bogotá primero</div>
+      <div class="marquee-item"><span class="dot"></span> Trazabilidad en tiempo real</div>
+      <div class="marquee-item"><span class="dot"></span> Distribución reinventada</div>
+      <div class="marquee-item accent"><span class="dot"></span> Tu ciudad, nuestro territorio</div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ THE SHIFT ═══════════════ -->
+  <section class="section-shift" id="shift">
+    <div class="shift-left">
+      <p class="shift-tag">→ La transformación</p>
+      <h2 class="shift-title">
+        Del mensajero<br>
+        de sobre al<br>
+        <span>héroe digital.</span>
+      </h2>
+      <p class="shift-body">
+        Durante años, Servilla conectó empresas y personas a través de sobres. Hoy el mundo cambió: las marcas más grandes del planeta necesitan llegar al último metro cuadrado de Bogotá. <strong>Nosotros lo hacemos posible.</strong>
+      </p>
+      <p class="shift-body">
+        Paquetes de e-commerce, entregas farmacéuticas, repuestos industriales, productos de belleza — cualquier cosa que una empresa global necesite mover localmente, <strong>Servilla lo entrega hoy.</strong>
+      </p>
+      <a href="#cta" class="shift-cta">
+        Únete a la red
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M1 7h12M7 1l6 6-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </a>
+    </div>
+
+    <div class="shift-right">
+      <div class="timeline">
+        <div class="tl-item">
+          <p class="tl-year">ANTES · Servilla tradicional</p>
+          <h3 class="tl-title">El sobre como negocio</h3>
+          <p class="tl-desc">Correspondencia corporativa, documentos legales, facturas físicas. Un mensajero, una bicicleta, una ciudad.</p>
+        </div>
+        <div class="tl-item">
+          <p class="tl-year">LA TRANSICIÓN · 2022—2024</p>
+          <h3 class="tl-title">Digitalización interna</h3>
+          <p class="tl-desc">Dashboard operacional propio, trazabilidad GPS, app para mensajeros, integración con operadores de e-commerce.</p>
+        </div>
+        <div class="tl-item active">
+          <p class="tl-year">HOY · Servilla Digital</p>
+          <h3 class="tl-title">La nueva distribución local</h3>
+          <p class="tl-desc">Paquetes de Shopify, Mercado Libre, farmacéuticas y marcas directas al consumidor (D2C). Velocidad de startup, cobertura de veterano.</p>
+        </div>
+        <div class="tl-item">
+          <p class="tl-year">MAÑANA · Visión 2026</p>
+          <h3 class="tl-title">Red local de clase mundial</h3>
+          <p class="tl-desc">Ser el operador logístico de última milla más confiable de Colombia para marcas globales que quieren presencia local real.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ STATS ═══════════════ -->
+  <div class="stats-strip">
+    <div class="stat-item">
+      <div class="stat-inner">
+        <div class="stat-num" data-target="50000">0</div>
+        <div class="stat-lbl">Paquetes / mes</div>
+      </div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-inner">
+        <div class="stat-num" data-target="98">0<sup>%</sup></div>
+        <div class="stat-lbl">Tasa de entrega exitosa</div>
+      </div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-inner">
+        <div class="stat-num" data-target="200">0</div>
+        <div class="stat-lbl">Mensajeros activos</div>
+      </div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-inner">
+        <div class="stat-num" data-target="4">0<sup>h</sup></div>
+        <div class="stat-lbl">Entrega same-day promedio</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ HOW IT WORKS ═══════════════ -->
+  <section class="section-how" id="how">
+    <div class="how-header">
+      <h2 class="how-title">
+        Cómo<br>
+        <span>funciona</span><br>
+        la magia.
+      </h2>
+      <p class="how-desc">Tres pasos. Sin fricciones. Tu producto sale de la bodega y llega al cliente en horas, no días.</p>
+    </div>
+
+    <div class="how-flow">
+      <div class="flow-step">
+        <p class="step-num">01 / Recepción</p>
+        <span class="step-icon">🏭</span>
+        <h3 class="step-title">La orden llega</h3>
+        <p class="step-body">Tu plataforma (Shopify, WooCommerce, SAP o API propia) envía la orden a Servilla en tiempo real. Nuestro sistema la asigna automáticamente.</p>
+        <span class="step-tag">API + Webhooks</span>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <p class="step-num">02 / Asignación</p>
+        <span class="step-icon">🚴</span>
+        <h3 class="step-title">Mensajero perfecto</h3>
+        <p class="step-body">Algoritmo de asignación por zona, carga y ruta óptima. El mensajero recibe la orden en su app con escaneo de código y navegación integrada.</p>
+        <span class="step-tag">App nativa PWA</span>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <p class="step-num">03 / Entrega</p>
+        <span class="step-icon">✅</span>
+        <h3 class="step-title">Confirmado en segundos</h3>
+        <p class="step-body">Foto de entrega, firma digital o código de confirmación. El cliente recibe notificación inmediata. Tú ves el panel en tiempo real.</p>
+        <span class="step-tag">Trazabilidad total</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ COMPANIES ═══════════════ -->
+  <section class="section-companies">
+    <div class="companies-header">
+      <span class="companies-label">Empresas globales que confían en distribución local</span>
+      <div class="companies-line"></div>
+    </div>
+    <div class="companies-grid">
+      <div class="company-cell">
+        <span class="company-icon">🛍️</span>
+        <span class="company-name">E-commerce</span>
+      </div>
+      <div class="company-cell">
+        <span class="company-icon">💊</span>
+        <span class="company-name">Pharma</span>
+      </div>
+      <div class="company-cell">
+        <span class="company-icon">🧴</span>
+        <span class="company-name">Beauty D2C</span>
+      </div>
+      <div class="company-cell">
+        <span class="company-icon">⚙️</span>
+        <span class="company-name">Industrial</span>
+      </div>
+      <div class="company-cell">
+        <span class="company-icon">👗</span>
+        <span class="company-name">Fashion</span>
+      </div>
+      <div class="company-cell">
+        <span class="company-icon">📱</span>
+        <span class="company-name">Tech</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ PROPOSITION ═══════════════ -->
+  <section class="section-prop">
+    <div class="prop-bg-text">LOCAL</div>
+    <div class="prop-inner">
+      <p class="prop-tag">→ Por qué Servilla</p>
+      <h2 class="prop-title">
+        <span class="outline">global</span><br>
+        <span class="accent">llega local.</span>
+      </h2>
+      <p class="prop-sub">
+        Las grandes marcas del mundo necesitan un aliado que conozca cada calle, cada barrio, cada portería. <strong>Nosotros somos Bogotá.</strong> Llevamos décadas en estas calles y ahora tenemos la tecnología para hacerlo a escala.
+      </p>
+      <div class="prop-actions">
+        <a href="#cta" class="btn-big lime">
+          Hablar con ventas
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M1 7h12M7 1l6 6-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </a>
+        <a href="#how" class="btn-big outline">Ver cómo funciona</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ COVERAGE ═══════════════ -->
+  <section class="section-coverage" id="coverage">
+    <div class="cov-left">
+      <p class="cov-tag">→ Cobertura</p>
+      <h2 class="cov-title">
+        Cada<br>barrio de<br>
+        <span>Bogotá.</span>
+      </h2>
+      <p class="cov-body">
+        28 zonas operativas, 200+ mensajeros distribuidos estratégicamente. Cubrimos desde Usaquén hasta Ciudad Bolívar, desde Suba hasta San Cristóbal.
+      </p>
+      <div class="cov-zones">
+        <div class="cov-zone"><span class="cov-zone-dot"></span><span class="cov-zone-name">Usaquén · Chapinero</span></div>
+        <div class="cov-zone"><span class="cov-zone-dot"></span><span class="cov-zone-name">Suba · Engativá</span></div>
+        <div class="cov-zone"><span class="cov-zone-dot"></span><span class="cov-zone-name">Fontibón · Kennedy</span></div>
+        <div class="cov-zone"><span class="cov-zone-dot"></span><span class="cov-zone-name">Bosa · Ciudad Bolívar</span></div>
+        <div class="cov-zone"><span class="cov-zone-dot"></span><span class="cov-zone-name">Teusaquillo · Barrios Unidos</span></div>
+        <div class="cov-zone"><span class="cov-zone-dot"></span><span class="cov-zone-name">Rafael Uribe · San Cristóbal</span></div>
+        <div class="cov-zone"><span class="cov-zone-dot"></span><span class="cov-zone-name">Santa Fe · Candelaria</span></div>
+        <div class="cov-zone"><span class="cov-zone-dot"></span><span class="cov-zone-name">Antonio Nariño · Puente Aranda</span></div>
+      </div>
+    </div>
+
+    <div class="cov-right">
+      <div class="city-grid" id="city-grid">
+        <!-- JS populated -->
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ CTA ═══════════════ -->
+  <section class="section-cta" id="cta">
+    <div class="cta-rings">
+      <div class="cta-ring"></div>
+      <div class="cta-ring"></div>
+      <div class="cta-ring"></div>
+    </div>
+    <div class="cta-content">
+      <p class="cta-pre">Únete a la nueva Servilla</p>
+      <h2 class="cta-title">
+        Tu marca<br>
+        <span class="accent">ya llegó.</span>
+      </h2>
+      <p class="cta-sub">
+        ¿Tienes una empresa que necesita distribuir en Bogotá de forma rápida y confiable? Hablemos. Integramos tu operación en 48 horas.
+      </p>
+      <div class="prop-actions">
+        <a href="#" class="btn-big lime">
+          Solicitar integración
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M1 7h12M7 1l6 6-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </a>
+        <a href="#" class="btn-big outline">Descargar la app</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════ FOOTER ═══════════════ -->
+  <footer>
+    <span class="footer-copy">© 2025 Servilla · Distribución local de clase mundial</span>
+    <span class="footer-brand">Ser<em>villa</em></span>
+    <span class="footer-right">Bogotá, Colombia · Hecho en la calle</span>
+  </footer>
+
+  <script>
+    /* ── Cursor ── */
+    const cur  = document.getElementById('cur');
+    const curR = document.getElementById('cur-r');
+    let mx=0, my=0, rx=0, ry=0;
+    document.addEventListener('mousemove', e => { mx=e.clientX; my=e.clientY; });
+    (function tick() {
+      cur.style.left  = mx+'px'; cur.style.top  = my+'px';
+      rx += (mx-rx)*.12; ry += (my-ry)*.12;
+      curR.style.left = rx+'px'; curR.style.top = ry+'px';
+      requestAnimationFrame(tick);
+    })();
+    document.querySelectorAll('a,button,.flow-step,.stat-item').forEach(el => {
+      el.addEventListener('mouseenter', () => {
+        cur.style.width='14px'; cur.style.height='14px';
+        curR.style.width='48px'; curR.style.height='48px';
+        curR.style.borderColor='rgba(200,241,53,.7)';
+      });
+      el.addEventListener('mouseleave', () => {
+        cur.style.width='8px'; cur.style.height='8px';
+        curR.style.width='32px'; curR.style.height='32px';
+        curR.style.borderColor='rgba(200,241,53,.4)';
+      });
+    });
+
+    /* ── Nav scroll ── */
+    const nav = document.getElementById('main-nav');
+    window.addEventListener('scroll', () => {
+      nav.classList.toggle('scrolled', window.scrollY > 60);
+    });
+
+    /* ── Stats counter ── */
+    const stats = document.querySelectorAll('.stat-num[data-target]');
+    const formats = [
+      v => v >= 1000 ? '+' + (v/1000).toFixed(0)+'K' : '+'+v,
+      v => v+'%',
+      v => '+'+v,
+      v => v+'h'
+    ];
+    const io = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        const el = entry.target;
+        const idx = Array.from(stats).indexOf(el);
+        const target = +el.dataset.target;
+        const fmt = formats[idx];
+        let start = null;
+        (function step(ts) {
+          if (!start) start = ts;
+          const p = Math.min((ts-start)/1400, 1);
+          const e = 1-Math.pow(1-p, 3);
+          el.textContent = fmt(Math.floor(target*e));
+          if (p < 1) requestAnimationFrame(step);
+        })(performance.now());
+        io.unobserve(el);
+      });
+    }, {threshold:.6});
+    stats.forEach(s => io.observe(s));
+
+    /* ── City grid ── */
+    const grid = document.getElementById('city-grid');
+    // Rough Bogotá shape: active zones
+    const bogotaMap = [
+      [0,0,0,1,1,1,0,0,0,0],
+      [0,0,1,1,1,1,1,0,0,0],
+      [0,1,1,2,1,1,1,1,0,0],
+      [0,1,2,2,2,1,1,1,0,0],
+      [1,1,2,3,2,2,1,1,1,0],
+      [1,1,1,2,2,2,2,1,1,0],
+      [0,1,1,2,2,2,1,1,0,0],
+      [0,1,1,1,2,1,1,1,0,0],
+      [0,0,1,1,1,1,1,0,0,0],
+      [0,0,0,1,1,1,0,0,0,0],
+    ];
+    bogotaMap.forEach(row => {
+      row.forEach(val => {
+        const cell = document.createElement('div');
+        cell.className = 'grid-cell';
+        if (val === 1) cell.classList.add('active');
+        if (val === 2) cell.classList.add('semi');
+        if (val === 3) cell.classList.add('hot');
+        grid.appendChild(cell);
+      });
+    });
+    // Pulse animation on city cells
+    const activeCells = grid.querySelectorAll('.grid-cell.active, .grid-cell.semi, .grid-cell.hot');
+    function pulseCells() {
+      const idx = Math.floor(Math.random() * activeCells.length);
+      const cell = activeCells[idx];
+      cell.style.transform = 'scale(1.4)';
+      cell.style.boxShadow = '0 0 8px rgba(200,241,53,.7)';
+      setTimeout(() => { cell.style.transform=''; cell.style.boxShadow=''; }, 300);
+    }
+    setInterval(pulseCells, 180);
+
+    /* ── Scroll reveal ── */
+    const reveals = document.querySelectorAll('.feature-card, .tl-item, .flow-step, .stat-item, .cov-zone, .company-cell');
+    const revealObs = new IntersectionObserver(entries => {
+      entries.forEach((entry, i) => {
+        if (entry.isIntersecting) {
+          entry.target.style.animation = `fade-up .5s ease both ${i * 0.07}s`;
+          entry.target.style.opacity = '1';
+          revealObs.unobserve(entry.target);
+        }
+      });
+    }, {threshold:.1});
+    reveals.forEach(el => {
+      el.style.opacity = '0';
+      revealObs.observe(el);
+    });
+  </script>
+</body>
+</html>

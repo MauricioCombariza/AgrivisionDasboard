@@ -5,12 +5,24 @@ import sys
 import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.db_connection import conectar_logistica
+import mysql.connector
 
 
 st.title("💰 Gestion de Pagos a Mensajeros")
 
-conn = conectar_logistica()
+def _conectar_local():
+    try:
+        return mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="",
+            database="logistica",
+        )
+    except Exception as e:
+        st.error(f"Error conectando a BD local: {e}")
+        return None
+
+conn = _conectar_local()
 if not conn:
     st.stop()
 

@@ -6,7 +6,7 @@ import sys
 import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.db_connection import conectar_logistica
+import mysql.connector
 
 # --- 1. CONFIGURACIÓN DE LOGS Y PÁGINA ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -15,7 +15,16 @@ logger = logging.getLogger(__name__)
 
 # --- 2. GESTIÓN DE BASE DE DATOS ---
 def conectar_db():
-    return conectar_logistica()
+    try:
+        return mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="",
+            database="logistica",
+        )
+    except Exception as e:
+        st.error(f"Error conectando a BD local: {e}")
+        return None
 
 # --- 3. CARGA DE MAESTROS (OPTIMIZACIÓN DE MEMORIA) ---
 @st.cache_data(ttl=600)

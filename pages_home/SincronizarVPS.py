@@ -16,15 +16,15 @@ VPS_HOST = "204.168.150.196"
 VPS_USER = "root"
 VPS_KEY  = os.path.expanduser("~/.ssh/agrivision_vps")
 
-LOCAL_USER = os.environ.get("DB_USER", "root")
-LOCAL_PASS = os.environ.get("DB_PASSWORD", "")
+LOCAL_USER = "root"
+LOCAL_PASS = ""
 
 VPS_DB_USER = "root"
 VPS_DB_PASS = "Root2024!"
 
 TABLAS_SYNC = {
     "imile":     ["paquetes"],
-    "logistica": ["gestiones_mensajero", "ordenes"],
+    "logistica": ["gestiones_mensajero", "ordenes", "planillas_revisadas"],
 }
 
 # ── Estado del VPS ────────────────────────────────────────────────────────────
