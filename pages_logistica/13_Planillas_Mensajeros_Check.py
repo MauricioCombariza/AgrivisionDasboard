@@ -6,17 +6,16 @@ import os
 
 import mysql.connector
 
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from utils.db_connection import conectar_logistica
+
 st.title("📑 Planillas Mensajeros Check")
 
-try:
-    conn = mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="",
-        database="logistica",
-    )
-except Exception as e:
-    st.error(f"Error conectando a BD local: {e}")
+conn = conectar_logistica()
+if not conn:
     st.stop()
 
 # Inicializar estado para edicion
