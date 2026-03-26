@@ -10,9 +10,9 @@ load_dotenv()
 
 # Configuración de bases de datos
 DB_CONFIG_IMILE = {
-    "host": os.environ.get("DB_HOST", "localhost"),
-    "user": os.environ.get("DB_USER", "root"),
-    "password": os.environ.get("DB_PASSWORD", ""),
+    "host": os.environ.get("DB_HOST_IMILE", "localhost"),
+    "user": os.environ.get("DB_USER_IMILE", "root"),
+    "password": os.environ.get("DB_PASSWORD_IMILE", ""),
     "database": os.environ.get("DB_NAME_IMILE", "imile")
 }
 
