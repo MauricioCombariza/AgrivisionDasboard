@@ -6,7 +6,8 @@ import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import mysql.connector
-from utils.db_connection import conectar_logistica
+from dotenv import load_dotenv
+load_dotenv()
 
 
 st.title("💰 Gestion de Pagos a Mensajeros")
@@ -28,8 +29,18 @@ conn = _conectar_local()
 if not conn:
     st.stop()
 
-# BD nube: personal (para leer nombres, zonas y tarifas de mensajeros)
-conn_nube = conectar_logistica()
+# BD nube: personal — solo disponible si el puerto 3306 del VPS es accesible.
+# Si falla (entorno local sin acceso directo), se usa la BD local como fallback.
+try:
+    conn_nube = mysql.connector.connect(
+        host=os.environ.get("DB_HOST", "localhost"),
+        user=os.environ.get("DB_USER", "root"),
+        password=os.environ.get("DB_PASSWORD", ""),
+        database=os.environ.get("DB_NAME_LOGISTICA", "logistica"),
+        connect_timeout=5,
+    )
+except Exception:
+    conn_nube = conn
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📤 Cargar Gestiones",
