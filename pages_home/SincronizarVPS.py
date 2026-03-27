@@ -24,7 +24,12 @@ VPS_DB_PASS = "Root2024!"
 
 TABLAS_SYNC = {
     "imile":     ["paquetes"],
-    "logistica": ["gestiones_mensajero", "ordenes", "planillas_revisadas", "personal"],
+    "logistica": ["gestiones_mensajero", "ordenes", "planillas_revisadas"],
+}
+
+# Tablas que se descargan del VPS a local (la nube es fuente de verdad)
+TABLAS_BAJAR = {
+    "logistica": ["personal"],
 }
 
 # ── Estado del VPS ────────────────────────────────────────────────────────────
@@ -81,6 +86,40 @@ def sincronizar_tabla(db, tabla, ssh_client, sftp, progreso_placeholder, log):
         os.unlink(ruta_sql)
         return True
 
+    except Exception as e:
+        log.append(f"❌ {db}.{tabla}: {e}")
+        return False
+
+
+# ── Descargar tabla del VPS a local ───────────────────────────────────────────
+def descargar_tabla(db, tabla, ssh_client, sftp, log):
+    try:
+        ruta_remota = f"/tmp/{db}_{tabla}_dl.sql"
+        cmd_dump = f"mysqldump -u{VPS_DB_USER} -p{VPS_DB_PASS} --single-transaction --no-tablespaces {db} {tabla} > {ruta_remota}"
+        _, stdout, stderr = ssh_client.exec_command(cmd_dump)
+        stdout.channel.recv_exit_status()
+
+        with tempfile.NamedTemporaryFile(suffix=".sql", delete=False) as f:
+            ruta_local = f.name
+        sftp.get(ruta_remota, ruta_local)
+        ssh_client.exec_command(f"rm {ruta_remota}")
+
+        cmd_import = ["mysql", f"-u{LOCAL_USER}"]
+        if LOCAL_PASS:
+            cmd_import.append(f"-p{LOCAL_PASS}")
+        cmd_import.append(db)
+        with open(ruta_local, "r", encoding="utf-8") as f:
+            resultado = subprocess.run(cmd_import, input=f.read(), capture_output=True, text=True)
+
+        os.unlink(ruta_local)
+
+        if resultado.returncode != 0:
+            err = "\n".join([l for l in resultado.stderr.splitlines() if "Warning" not in l]).strip()
+            log.append(f"❌ Error importando {db}.{tabla} localmente: {err[:200]}")
+            return False
+
+        log.append(f"✅ {db}.{tabla} descargada del VPS a local")
+        return True
     except Exception as e:
         log.append(f"❌ {db}.{tabla}: {e}")
         return False
@@ -164,4 +203,45 @@ if st.button("🚀 Sincronizar con VPS", type="primary"):
     if log:
         with st.expander("Ver detalles"):
             for linea in log:
+                st.write(linea)
+
+st.divider()
+
+# Bajar tablas del VPS a local
+st.markdown("### Descargar del VPS a local")
+st.info("Descarga tablas que se administran en el VPS (ej. personal) hacia la BD local.")
+for db, tablas in TABLAS_BAJAR.items():
+    for tabla in tablas:
+        st.write(f"• `{db}.{tabla}`")
+
+if st.button("⬇️ Descargar personal del VPS", type="secondary"):
+    log2 = []
+    try:
+        with st.spinner("Conectando al VPS..."):
+            client2 = paramiko.SSHClient()
+            client2.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client2.connect(VPS_HOST, username=VPS_USER, key_filename=VPS_KEY, timeout=15)
+            sftp2 = client2.open_sftp()
+
+        for db, tablas in TABLAS_BAJAR.items():
+            for tabla in tablas:
+                st.info(f"Descargando `{db}.{tabla}`...")
+                descargar_tabla(db, tabla, client2, sftp2, log2)
+
+        sftp2.close()
+        client2.close()
+
+        hora = datetime.now().strftime("%H:%M:%S")
+        errores = [l for l in log2 if l.startswith("❌")]
+        if not errores:
+            st.success(f"✅ Descarga completada a las {hora}")
+        else:
+            st.warning("⚠️ Descarga con errores")
+    except Exception as e:
+        st.error(f"❌ Error de conexión SSH: {e}")
+        log2.append(f"❌ SSH: {e}")
+
+    if log2:
+        with st.expander("Ver detalles"):
+            for linea in log2:
                 st.write(linea)
