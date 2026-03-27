@@ -24,7 +24,7 @@ VPS_DB_PASS = "Root2024!"
 
 TABLAS_SYNC = {
     "imile":     ["paquetes"],
-    "logistica": ["gestiones_mensajero", "ordenes", "planillas_revisadas"],
+    "logistica": ["gestiones_mensajero", "ordenes", "planillas_revisadas", "personal"],
 }
 
 # ── Estado del VPS ────────────────────────────────────────────────────────────
