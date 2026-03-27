@@ -5,14 +5,31 @@ import sys
 import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import mysql.connector
 from utils.db_connection import conectar_logistica
 
 
 st.title("💰 Gestion de Pagos a Mensajeros")
 
-conn = conectar_logistica()
+# BD local: gestiones_mensajero, ordenes, planillas_revisadas, clientes, precios
+def _conectar_local():
+    try:
+        return mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password="",
+            database="logistica",
+        )
+    except Exception as e:
+        st.error(f"Error conectando a BD local: {e}")
+        return None
+
+conn = _conectar_local()
 if not conn:
     st.stop()
+
+# BD nube: personal (para leer nombres, zonas y tarifas de mensajeros)
+conn_nube = conectar_logistica()
 
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📤 Cargar Gestiones",
@@ -129,8 +146,9 @@ with tab1:
                 if p['costo_mensajero_devolucion']:
                     precios_zona_dict[key][zona]['devolucion'] = float(p['costo_mensajero_devolucion'])
 
-            # Obtener personal (mensajeros, couriers y alistamiento) con zona y tarifas
-            cursor.execute("""
+            # Obtener personal desde BD nube (fuente de verdad para mensajeros)
+            cursor_nube = conn_nube.cursor(dictionary=True)
+            cursor_nube.execute("""
                 SELECT codigo, id, nombre_completo, tipo_personal, zona,
                        tarifa_entrega_local, tarifa_entrega_nacional,
                        tarifa_devolucion_local, tarifa_devolucion_nacional
@@ -146,7 +164,8 @@ with tab1:
                 'tarifa_entrega_nacional': float(m['tarifa_entrega_nacional']) if m['tarifa_entrega_nacional'] else 0,
                 'tarifa_devolucion_local': float(m['tarifa_devolucion_local']) if m['tarifa_devolucion_local'] else 0,
                 'tarifa_devolucion_nacional': float(m['tarifa_devolucion_nacional']) if m['tarifa_devolucion_nacional'] else 0
-            } for m in cursor.fetchall()}
+            } for m in cursor_nube.fetchall()}
+            cursor_nube.close()
 
             # Convertir cod_men a texto de 4 digitos con ceros a la izquierda
             df['cod_men'] = df['cod_men'].fillna(0).astype(int).astype(str).str.zfill(4)
