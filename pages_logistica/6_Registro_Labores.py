@@ -458,7 +458,11 @@ def recalcular_subsidios_rango(conn, fecha_desde, fecha_hasta, personal_id: int 
 
 st.title("⏱️ Registro de Horas y Labores")
 
-conn = conectar_logistica()
+# Reusar la conexión dentro de la misma sesión para evitar crear una nueva
+# conexión TCP al VPS en cada rerun (causa principal de cuelgues)
+if '_labores_conn' not in st.session_state or not st.session_state._labores_conn.is_connected():
+    st.session_state._labores_conn = conectar_logistica()
+conn = st.session_state._labores_conn
 if not conn:
     st.stop()
 
@@ -1733,8 +1737,14 @@ with tab4:
         if tipo_consulta == "Todos":
             st.markdown("### 📋 Resumen de Labores por Fecha")
 
-            # Auto-calcular subsidios faltantes (solo crea nuevos, no recalcula existentes)
-            subsidios_creados = auto_calcular_subsidios_consulta(conn, fecha_desde, fecha_hasta)
+            # Auto-calcular subsidios faltantes — solo una vez por carga de página,
+            # no en cada rerun (evita writes automáticos en cada interacción del usuario)
+            _auto_key = f"_auto_subsidios_{fecha_desde}_{fecha_hasta}"
+            if _auto_key not in st.session_state:
+                subsidios_creados = auto_calcular_subsidios_consulta(conn, fecha_desde, fecha_hasta)
+                st.session_state[_auto_key] = subsidios_creados
+            else:
+                subsidios_creados = st.session_state[_auto_key]
             if subsidios_creados > 0:
                 st.info(f"Se calcularon {subsidios_creados} subsidio(s) de transporte automáticamente")
 
@@ -2770,41 +2780,45 @@ with tab5:
             st.markdown("### Resumen de TODO el Personal")
             st.markdown(f"**Periodo:** {fecha_desde_plan.strftime('%d/%m/%Y')} - {fecha_hasta_plan.strftime('%d/%m/%Y')}")
 
-            # Consultar totales por personal - Horas (alistamiento + admin)
-            cursor.execute("""
-                SELECT p.codigo, p.nombre_completo,
-                    COALESCE(SUM(rh.total), 0) as valor_horas
-                FROM personal p
-                LEFT JOIN registro_horas rh ON rh.personal_id = p.id
-                    AND rh.fecha BETWEEN %s AND %s
-                WHERE p.activo = TRUE
-                GROUP BY p.id, p.codigo, p.nombre_completo
-            """, (fecha_desde_plan, fecha_hasta_plan))
-            totales_horas = {r['codigo']: {'nombre': r['nombre_completo'], 'horas': float(r['valor_horas'])} for r in cursor.fetchall()}
+            # Cachear resultados por periodo para evitar 3 queries pesadas en cada rerun
+            _plan_cache_key = f"_plan_todos_{fecha_desde_plan}_{fecha_hasta_plan}"
+            if _plan_cache_key not in st.session_state:
+                cursor.execute("""
+                    SELECT p.codigo, p.nombre_completo,
+                        COALESCE(SUM(rh.total), 0) as valor_horas
+                    FROM personal p
+                    LEFT JOIN registro_horas rh ON rh.personal_id = p.id
+                        AND rh.fecha BETWEEN %s AND %s
+                    WHERE p.activo = TRUE
+                    GROUP BY p.id, p.codigo, p.nombre_completo
+                """, (fecha_desde_plan, fecha_hasta_plan))
+                totales_horas = {r['codigo']: {'nombre': r['nombre_completo'], 'horas': float(r['valor_horas'])} for r in cursor.fetchall()}
 
-            # Labores (pegado, transporte)
-            cursor.execute("""
-                SELECT p.codigo,
-                    COALESCE(SUM(rl.total), 0) as valor_labores
-                FROM personal p
-                LEFT JOIN registro_labores rl ON rl.personal_id = p.id
-                    AND rl.fecha BETWEEN %s AND %s
-                WHERE p.activo = TRUE
-                GROUP BY p.id, p.codigo
-            """, (fecha_desde_plan, fecha_hasta_plan))
-            totales_labores = {r['codigo']: float(r['valor_labores']) for r in cursor.fetchall()}
+                cursor.execute("""
+                    SELECT p.codigo,
+                        COALESCE(SUM(rl.total), 0) as valor_labores
+                    FROM personal p
+                    LEFT JOIN registro_labores rl ON rl.personal_id = p.id
+                        AND rl.fecha BETWEEN %s AND %s
+                    WHERE p.activo = TRUE
+                    GROUP BY p.id, p.codigo
+                """, (fecha_desde_plan, fecha_hasta_plan))
+                totales_labores = {r['codigo']: float(r['valor_labores']) for r in cursor.fetchall()}
 
-            # Subsidios de transporte
-            cursor.execute("""
-                SELECT p.codigo,
-                    COALESCE(SUM(sub_t.total), 0) as valor_subsidio
-                FROM personal p
-                LEFT JOIN subsidio_transporte sub_t ON sub_t.personal_id = p.id
-                    AND sub_t.fecha BETWEEN %s AND %s
-                WHERE p.activo = TRUE
-                GROUP BY p.id, p.codigo
-            """, (fecha_desde_plan, fecha_hasta_plan))
-            totales_subsidios = {r['codigo']: float(r['valor_subsidio']) for r in cursor.fetchall()}
+                cursor.execute("""
+                    SELECT p.codigo,
+                        COALESCE(SUM(sub_t.total), 0) as valor_subsidio
+                    FROM personal p
+                    LEFT JOIN subsidio_transporte sub_t ON sub_t.personal_id = p.id
+                        AND sub_t.fecha BETWEEN %s AND %s
+                    WHERE p.activo = TRUE
+                    GROUP BY p.id, p.codigo
+                """, (fecha_desde_plan, fecha_hasta_plan))
+                totales_subsidios = {r['codigo']: float(r['valor_subsidio']) for r in cursor.fetchall()}
+
+                st.session_state[_plan_cache_key] = (totales_horas, totales_labores, totales_subsidios)
+            else:
+                totales_horas, totales_labores, totales_subsidios = st.session_state[_plan_cache_key]
 
             # Combinar resultados
             resumen_personal = []

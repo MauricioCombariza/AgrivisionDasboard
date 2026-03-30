@@ -20,7 +20,8 @@ DB_CONFIG_LOGISTICA = {
     "host": os.environ.get("DB_HOST", "localhost"),
     "user": os.environ.get("DB_USER", "root"),
     "password": os.environ.get("DB_PASSWORD", ""),
-    "database": os.environ.get("DB_NAME_LOGISTICA", "logistica")
+    "database": os.environ.get("DB_NAME_LOGISTICA", "logistica"),
+    "connect_timeout": 10,
 }
 
 def get_connection(database="imile"):

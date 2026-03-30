@@ -62,6 +62,12 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 with tab1:
     st.subheader("Facturas Emitidas a Clientes")
 
+    # Estado para confirmación de borrado
+    if '_fac_ids_borrar' not in st.session_state:
+        st.session_state._fac_ids_borrar = []
+    if '_fac_nums_borrar' not in st.session_state:
+        st.session_state._fac_nums_borrar = []
+
     col1, col2 = st.columns([3, 1])
 
     with col1:
@@ -148,6 +154,13 @@ with tab1:
                         f"Saldo por cobrar: **${saldo_sel:,.0f}**"
                     )
 
+                    # Guardar IDs seleccionados para el panel de borrado en col2
+                    _ids_sel  = df.loc[idx_sel, 'id'].tolist()
+                    _nums_sel = [str(n) for n in df.loc[idx_sel, 'numero_factura'].tolist()]
+                    if st.button("🗑️ Eliminar factura(s) seleccionada(s)", key="btn_del_fac_trigger", type="secondary"):
+                        st.session_state._fac_ids_borrar  = _ids_sel
+                        st.session_state._fac_nums_borrar = _nums_sel
+
                 try:
                     df_export['fecha_emision']    = pd.to_datetime(df_export['fecha_emision'])
                     df_export['fecha_vencimiento']= pd.to_datetime(df_export['fecha_vencimiento'])
@@ -188,6 +201,84 @@ with tab1:
             st.metric("Vencidas", vencidas, delta_color="inverse")
         except Exception as e:
             st.error(f"Error: {e}")
+
+        # ── Panel de confirmación de borrado ──────────────────────────────────
+        if st.session_state._fac_ids_borrar:
+            st.divider()
+            st.markdown("### 🗑️ Confirmar eliminación")
+            st.error(
+                f"Se eliminarán **{len(st.session_state._fac_ids_borrar)}** factura(s) y todos sus pagos.\n\n"
+                "Las órdenes vinculadas quedarán disponibles para facturar nuevamente."
+            )
+            for num in st.session_state._fac_nums_borrar:
+                st.caption(f"• {num}")
+
+            if st.button("✅ Sí, eliminar", key="btn_del_fac_confirm", type="primary", use_container_width=True):
+                try:
+                    _cur_del = conn.cursor()
+                    for _fid in st.session_state._fac_ids_borrar:
+                        # 1. Liberar órdenes vinculadas
+                        _cur_del.execute("""
+                            UPDATE ordenes o
+                            JOIN detalle_facturas_emitidas dfe ON dfe.orden_id = o.id
+                            SET o.facturado = FALSE
+                            WHERE dfe.factura_id = %s AND dfe.orden_id IS NOT NULL
+                        """, (_fid,))
+                        # 2. Borrar pagos recibidos
+                        _cur_del.execute("DELETE FROM pagos_recibidos WHERE factura_id = %s", (_fid,))
+                        # 3. Borrar detalle
+                        _cur_del.execute("DELETE FROM detalle_facturas_emitidas WHERE factura_id = %s", (_fid,))
+                        # 4. Borrar factura
+                        _cur_del.execute("DELETE FROM facturas_emitidas WHERE id = %s", (_fid,))
+                    conn.commit()
+                    _cur_del.close()
+                    st.success(f"✅ {len(st.session_state._fac_ids_borrar)} factura(s) eliminada(s)")
+                    st.session_state._fac_ids_borrar  = []
+                    st.session_state._fac_nums_borrar = []
+                    st.rerun()
+                except Exception as e:
+                    conn.rollback()
+                    st.error(f"Error al eliminar: {e}")
+
+            if st.button("❌ Cancelar", key="btn_del_fac_cancel", use_container_width=True):
+                st.session_state._fac_ids_borrar  = []
+                st.session_state._fac_nums_borrar = []
+                st.rerun()
+
+    st.divider()
+
+    # ── Diagnóstico: órdenes en más de una factura ────────────────────────────
+    with st.expander("🔍 Diagnóstico: órdenes facturadas más de una vez", expanded=False):
+        try:
+            _cur_diag = conn.cursor(dictionary=True)
+            _cur_diag.execute("""
+                SELECT
+                    o.numero_orden,
+                    c.nombre_empresa as cliente,
+                    GROUP_CONCAT(fe.numero_factura ORDER BY fe.fecha_emision SEPARATOR ' | ') as facturas,
+                    COUNT(dfe.factura_id) as veces
+                FROM detalle_facturas_emitidas dfe
+                JOIN ordenes o ON dfe.orden_id = o.id
+                JOIN facturas_emitidas fe ON dfe.factura_id = fe.id
+                JOIN clientes c ON fe.cliente_id = c.id
+                WHERE dfe.orden_id IS NOT NULL
+                GROUP BY dfe.orden_id
+                HAVING COUNT(dfe.factura_id) > 1
+                ORDER BY c.nombre_empresa, o.numero_orden
+            """)
+            _duplicados_diag = _cur_diag.fetchall()
+            _cur_diag.close()
+
+            if _duplicados_diag:
+                st.error(f"⚠️ Se encontraron **{len(_duplicados_diag)}** órdenes en más de una factura:")
+                _df_diag = pd.DataFrame(_duplicados_diag)
+                _df_diag.columns = ['Orden', 'Cliente', 'Facturas', 'Veces facturada']
+                st.dataframe(_df_diag, use_container_width=True, hide_index=True)
+                st.caption("Para corregir: elimina la factura duplicada usando el checkbox y el botón '🗑️ Eliminar'.")
+            else:
+                st.success("✅ No hay órdenes duplicadas en facturas.")
+        except Exception as e:
+            st.error(f"Error en diagnóstico: {e}")
 
     st.divider()
 
@@ -343,63 +434,84 @@ with tab1:
             elif total_factura <= 0:
                 st.error("El valor de la factura debe ser mayor a 0")
             else:
-                try:
-                    cursor = conn.cursor()
+                # ── Verificar que ninguna orden ya esté en otra factura ────────
+                _ordenes_duplicadas = []
+                if ordenes_ids_seleccionadas:
+                    try:
+                        _cur_chk = conn.cursor(dictionary=True)
+                        _ph = ','.join(['%s'] * len(ordenes_ids_seleccionadas))
+                        _cur_chk.execute(f"""
+                            SELECT o.numero_orden, fe.numero_factura, fe.id as factura_id
+                            FROM detalle_facturas_emitidas dfe
+                            JOIN facturas_emitidas fe ON dfe.factura_id = fe.id
+                            JOIN ordenes o ON dfe.orden_id = o.id
+                            WHERE dfe.orden_id IN ({_ph})
+                        """, ordenes_ids_seleccionadas)
+                        _ordenes_duplicadas = _cur_chk.fetchall()
+                        _cur_chk.close()
+                    except Exception:
+                        pass
 
-                    # Cantidad de items: usar ingresado o contar órdenes seleccionadas
-                    items_factura = cantidad_items if cantidad_items > 0 else (len(ordenes_ids_seleccionadas) if ordenes_ids_seleccionadas else 1)
+                if _ordenes_duplicadas:
+                    st.error("⚠️ Las siguientes órdenes ya están vinculadas a otra factura:")
+                    for _dup in _ordenes_duplicadas:
+                        st.error(f"  • Orden **{_dup['numero_orden']}** → factura **{_dup['numero_factura']}**")
+                    st.warning("Elimina la factura existente o deselecciona esas órdenes antes de continuar.")
+                else:
+                    try:
+                        cursor = conn.cursor()
 
-                    cursor.execute("""
-                        INSERT INTO facturas_emitidas
-                        (numero_factura, cliente_id, fecha_emision, fecha_vencimiento,
-                         periodo_mes, periodo_anio, cantidad_items, subtotal, total, saldo_pendiente, estado)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pendiente')
-                    """, (numero_factura, cliente_id, fecha_emision, fecha_vencimiento,
-                          periodo_mes, periodo_anio, items_factura,
-                          total_factura, total_factura, total_factura))
+                        # Cantidad de items: usar ingresado o contar órdenes seleccionadas
+                        items_factura = cantidad_items if cantidad_items > 0 else (len(ordenes_ids_seleccionadas) if ordenes_ids_seleccionadas else 1)
 
-                    factura_id = cursor.lastrowid
+                        cursor.execute("""
+                            INSERT INTO facturas_emitidas
+                            (numero_factura, cliente_id, fecha_emision, fecha_vencimiento,
+                             periodo_mes, periodo_anio, cantidad_items, subtotal, total, saldo_pendiente, estado)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pendiente')
+                        """, (numero_factura, cliente_id, fecha_emision, fecha_vencimiento,
+                              periodo_mes, periodo_anio, items_factura,
+                              total_factura, total_factura, total_factura))
 
-                    # Insertar detalle principal con la descripción
-                    cursor.execute("""
-                        INSERT INTO detalle_facturas_emitidas
-                        (factura_id, orden_id, descripcion, cantidad, precio_unitario, subtotal)
-                        VALUES (%s, NULL, %s, %s, %s, %s)
-                    """, (factura_id,
-                          descripcion_factura or f"Facturación período {periodo_mes}/{periodo_anio}",
-                          items_factura,
-                          total_factura / items_factura if items_factura > 0 else total_factura,
-                          total_factura))
+                        factura_id = cursor.lastrowid
 
-                    # Si hay órdenes seleccionadas con checkboxes, vincularlas y marcarlas como facturadas
-                    ordenes_vinculadas = 0
-                    if ordenes_ids_seleccionadas:
-                        for orden_id_sel in ordenes_ids_seleccionadas:
-                            # Buscar la orden en la lista
-                            orden = [o for o in ordenes_disponibles if o['id'] == orden_id_sel][0]
+                        # Insertar detalle principal con la descripción
+                        cursor.execute("""
+                            INSERT INTO detalle_facturas_emitidas
+                            (factura_id, orden_id, descripcion, cantidad, precio_unitario, subtotal)
+                            VALUES (%s, NULL, %s, %s, %s, %s)
+                        """, (factura_id,
+                              descripcion_factura or f"Facturación período {periodo_mes}/{periodo_anio}",
+                              items_factura,
+                              total_factura / items_factura if items_factura > 0 else total_factura,
+                              total_factura))
 
-                            # Vincular orden a factura
-                            cursor.execute("""
-                                INSERT INTO detalle_facturas_emitidas
-                                (factura_id, orden_id, descripcion, cantidad, precio_unitario, subtotal)
-                                VALUES (%s, %s, %s, %s, 0, 0)
-                            """, (factura_id, orden['id'], f"Orden vinculada: {orden['numero_orden']}", orden['cantidad_total']))
+                        # Si hay órdenes seleccionadas con checkboxes, vincularlas y marcarlas como facturadas
+                        ordenes_vinculadas = 0
+                        if ordenes_ids_seleccionadas:
+                            for orden_id_sel in ordenes_ids_seleccionadas:
+                                orden = [o for o in ordenes_disponibles if o['id'] == orden_id_sel][0]
 
-                            # Marcar orden como facturada
-                            cursor.execute("UPDATE ordenes SET facturado = TRUE WHERE id = %s", (orden['id'],))
-                            ordenes_vinculadas += 1
+                                cursor.execute("""
+                                    INSERT INTO detalle_facturas_emitidas
+                                    (factura_id, orden_id, descripcion, cantidad, precio_unitario, subtotal)
+                                    VALUES (%s, %s, %s, %s, 0, 0)
+                                """, (factura_id, orden['id'], f"Orden vinculada: {orden['numero_orden']}", orden['cantidad_total']))
 
-                    conn.commit()
-                    msg = f"✅ Factura {numero_factura} creada por ${total_factura:,.0f}"
-                    if ordenes_vinculadas > 0:
-                        msg += f" | {ordenes_vinculadas} órdenes vinculadas y marcadas como facturadas"
-                    st.success(msg)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error al crear factura: {e}")
-                    import traceback
-                    st.code(traceback.format_exc())
-                    conn.rollback()
+                                cursor.execute("UPDATE ordenes SET facturado = TRUE WHERE id = %s", (orden['id'],))
+                                ordenes_vinculadas += 1
+
+                        conn.commit()
+                        msg = f"✅ Factura {numero_factura} creada por ${total_factura:,.0f}"
+                        if ordenes_vinculadas > 0:
+                            msg += f" | {ordenes_vinculadas} órdenes vinculadas y marcadas como facturadas"
+                        st.success(msg)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al crear factura: {e}")
+                        import traceback
+                        st.code(traceback.format_exc())
+                        conn.rollback()
 
 with tab2:
     st.subheader("Registrar Pago Recibido")

@@ -24,7 +24,7 @@ VPS_DB_PASS = "Root2024!"
 
 TABLAS_SYNC = {
     "imile":     ["paquetes"],
-    "logistica": ["gestiones_mensajero", "ordenes", "planillas_revisadas"],
+    "logistica": ["gestiones_mensajero", "ordenes"],
 }
 
 # Tablas que se descargan del VPS a local (la nube es fuente de verdad)
@@ -71,9 +71,13 @@ def sincronizar_tabla(db, tabla, ssh_client, sftp, progreso_placeholder, log):
 
         # 3. Importar en VPS
         cmd_import = f"mysql -u{VPS_DB_USER} -p{VPS_DB_PASS} {db} < {ruta_remota} && rm {ruta_remota}"
-        _, stdout, stderr = ssh_client.exec_command(cmd_import)
-        stdout.channel.recv_exit_status()
+        _, stdout, stderr = ssh_client.exec_command(cmd_import, timeout=300)
+        # Leer stdout y stderr ANTES de recv_exit_status para drenar los buffers
+        # del canal SSH y evitar deadlock (si stderr se llena, el proceso remoto
+        # queda bloqueado esperando que se drene, y recv_exit_status nunca retorna)
+        stdout.read()  # usualmente vacío para mysql import
         err = stderr.read().decode().strip()
+        stdout.channel.recv_exit_status()
 
         # Ignorar warnings de password (son normales)
         err_real = "\n".join([l for l in err.splitlines() if "Warning" not in l]).strip()
@@ -96,7 +100,10 @@ def descargar_tabla(db, tabla, ssh_client, sftp, log):
     try:
         ruta_remota = f"/tmp/{db}_{tabla}_dl.sql"
         cmd_dump = f"mysqldump -u{VPS_DB_USER} -p{VPS_DB_PASS} --single-transaction --no-tablespaces {db} {tabla} > {ruta_remota}"
-        _, stdout, stderr = ssh_client.exec_command(cmd_dump)
+        _, stdout, stderr = ssh_client.exec_command(cmd_dump, timeout=300)
+        # Drenar buffers antes de recv_exit_status para evitar deadlock SSH
+        stdout.read()  # vacío (dump va al archivo via >)
+        stderr.read()  # drenar warnings
         stdout.channel.recv_exit_status()
 
         with tempfile.NamedTemporaryFile(suffix=".sql", delete=False) as f:
