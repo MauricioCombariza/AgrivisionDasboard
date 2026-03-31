@@ -139,9 +139,13 @@ if couriers_df.empty:
     st.warning("No hay couriers externos activos en la base de datos.")
     st.stop()
 
+# Normalizar codigo a float para que coincida con cod_men numérico del CSV
+couriers_df["codigo"] = pd.to_numeric(couriers_df["codigo"], errors="coerce")
+couriers_df = couriers_df.dropna(subset=["codigo"])
+
 with st.spinner("Leyendo CSV y filtrando pendientes..."):
     df_csv   = pd.read_csv(CSV_PATH, low_memory=False, encoding="latin1")
-    codigos  = couriers_df["codigo"].dropna().astype(float).tolist()
+    codigos  = couriers_df["codigo"].tolist()
     pendientes = filtrar_pendientes(df_csv, codigos)
 
 if not pendientes:
