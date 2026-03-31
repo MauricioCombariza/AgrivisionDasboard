@@ -80,6 +80,7 @@ PAGES_PAQUETES = [
     st.Page("pages_home/Data.py", title="Data"),
     st.Page("pages_home/DespachoCourrier.py", title="Despacho Courrier"),
     st.Page("pages_home/GestionPendiente.py", title="Gestión Pendiente"),
+    st.Page("pages_home/EnvioPendientesCourier.py", title="Envío Pendientes Courier"),
     st.Page("pages_home/Ingreso_paquetes.py", title="Ingreso Paquetes"),
     st.Page("pages_home/Paquetes.py", title="Paquetes"),
     st.Page("pages_home/Pendientes.py", title="Pendientes"),
