@@ -357,14 +357,15 @@ with tab1:
         gestiones_cliente = {r['cliente']: {'entregados': int(r['entregados'] or 0), 'devoluciones': int(r['devoluciones'] or 0)} for r in cursor.fetchall()}
 
         # 6. Query principal de ordenes
+        # NOTA: costo_total de ordenes NO se usa porque duplica registro_horas/labores y gestiones_mensajero
         query = """
             SELECT
                 c.nombre_empresa as cliente,
                 COUNT(DISTINCT o.id) as total_ordenes,
                 SUM(o.cantidad_total) as total_items,
                 SUM(o.valor_total) as ingresos,
-                SUM(o.costo_total) as costos_operativos,
-                SUM(o.utilidad_total) as utilidad_base
+                0 as costos_operativos,
+                SUM(o.valor_total) as utilidad_base
             FROM clientes c
             LEFT JOIN ordenes o ON c.id = o.cliente_id
             WHERE YEAR(o.fecha_recepcion) = %s
@@ -449,9 +450,9 @@ with tab1:
 
             # Calcular totales
             total_ingresos = sum([r['ingresos'] for r in datos_procesados])
-            total_costos_op = sum([r['costos_operativos'] for r in datos_procesados])
+            # costos_operativos de ordenes NO se suma — duplica registro_horas/labores y gestiones_mensajero
             total_costos_directos = total_costo_mensajeros + total_costo_transporte + total_alistamiento
-            utilidad_bruta = total_ingresos - total_costos_op - total_costos_directos
+            utilidad_bruta = total_ingresos - total_costos_directos
             total_gastos_fijos = total_gastos_admin + total_nomina
             utilidad_neta = utilidad_bruta - total_gastos_fijos
             margen_bruto = (utilidad_bruta / total_ingresos * 100) if total_ingresos > 0 else 0
@@ -506,7 +507,6 @@ with tab1:
                 # Tabla de costos
                 costos_data = {
                     'Concepto': [
-                        '📦 Costos Operativos (órdenes)',
                         '🏍️ Costo Mensajeros',
                         '🏭 Alistamiento / Labores',
                         '🚚 Costo Transporte',
@@ -514,7 +514,6 @@ with tab1:
                         '👥 Nómina y Provisiones'
                     ],
                     'Monto': [
-                        f"${total_costos_op:,.0f}",
                         f"${total_costo_mensajeros:,.0f}",
                         f"${total_alistamiento:,.0f}",
                         f"${total_costo_transporte:,.0f}",
@@ -522,7 +521,6 @@ with tab1:
                         f"${total_nomina:,.0f}"
                     ],
                     '% de Ingresos': [
-                        f"{(total_costos_op/total_ingresos*100) if total_ingresos > 0 else 0:.1f}%",
                         f"{(total_costo_mensajeros/total_ingresos*100) if total_ingresos > 0 else 0:.1f}%",
                         f"{(total_alistamiento/total_ingresos*100) if total_ingresos > 0 else 0:.1f}%",
                         f"{(total_costo_transporte/total_ingresos*100) if total_ingresos > 0 else 0:.1f}%",
@@ -534,7 +532,7 @@ with tab1:
                 st.dataframe(df_costos, use_container_width=True, hide_index=True)
 
                 # Total de costos
-                total_todos_costos = total_costos_op + total_costo_mensajeros + total_alistamiento + total_costo_transporte + total_gastos_admin + total_nomina
+                total_todos_costos = total_costo_mensajeros + total_alistamiento + total_costo_transporte + total_gastos_admin + total_nomina
                 st.markdown(f"**Total Costos: ${total_todos_costos:,.0f}** ({(total_todos_costos/total_ingresos*100) if total_ingresos > 0 else 0:.1f}% de ingresos)")
 
             with col2:
@@ -622,7 +620,6 @@ with tab1:
 
                     with col4:
                         st.markdown("**💸 Costos**")
-                        st.write(f"Operativos: ${row['costos_operativos']:,.0f}")
                         st.write(f"Mensajeros: ${row['costo_mensajeros']:,.0f}")
                         st.write(f"Transporte: ${row['costo_transporte']:,.0f}")
                         st.write(f"**Total: ${row['costos_totales']:,.0f}**")
@@ -1051,13 +1048,13 @@ with tab4:
         ordenes_result = cursor.fetchall()
 
         if ordenes_result:
-            # Obtener costos de mensajeros por orden
+            # Costos de mensajeros por orden — solo entregas/devoluciones, NO alistamiento
+            # El alistamiento se toma de registro_horas + registro_labores (6_Registro_Labores)
             query_costos_msg = """
                 SELECT
                     orden,
                     UPPER(TRIM(cliente)) as cliente,
-                    SUM(CASE WHEN tipo_gestion LIKE '%Entrega%' OR tipo_gestion LIKE '%Devol%' THEN valor_total ELSE 0 END) as costo_mensajeros,
-                    SUM(CASE WHEN tipo_gestion LIKE '%Alistamiento%' OR tipo_gestion LIKE '%Alista%' THEN valor_total ELSE 0 END) as costo_alistamiento
+                    SUM(valor_total) as costo_mensajeros
                 FROM gestiones_mensajero
                 WHERE fecha_registro BETWEEN %s AND %s
                 GROUP BY orden, UPPER(TRIM(cliente))
@@ -1073,7 +1070,6 @@ with tab4:
                     orden_key = orden_key[:-2]
                 costos_por_orden[orden_key] = {
                     'costo_mensajeros': float(r['costo_mensajeros'] or 0),
-                    'costo_alistamiento': float(r['costo_alistamiento'] or 0)
                 }
 
             # Procesar datos
@@ -1082,7 +1078,6 @@ with tab4:
                 'items': 0,
                 'vendido': 0,
                 'costo_msg': 0,
-                'costo_alist': 0,
                 'utilidad': 0
             }
 
@@ -1091,13 +1086,12 @@ with tab4:
                 if num_orden.endswith('.0'):
                     num_orden = num_orden[:-2]
 
-                costos = costos_por_orden.get(num_orden, {'costo_mensajeros': 0, 'costo_alistamiento': 0})
+                costos = costos_por_orden.get(num_orden, {'costo_mensajeros': 0})
 
                 items = int(orden['items'] or 0)
                 vendido = float(orden['total_vendido'] or 0)
                 costo_msg = costos['costo_mensajeros']
-                costo_alist = costos['costo_alistamiento']
-                utilidad = vendido - costo_msg - costo_alist
+                utilidad = vendido - costo_msg
                 margen = (utilidad / vendido * 100) if vendido > 0 else 0
 
                 datos_tabla.append({
@@ -1107,7 +1101,6 @@ with tab4:
                     'Items': items,
                     'Vendido': vendido,
                     'Costo Msg': costo_msg,
-                    'Costo Alist': costo_alist,
                     'Utilidad': utilidad,
                     'Margen %': margen,
                     'Estado': orden['estado'].capitalize() if orden['estado'] else '-'
@@ -1116,7 +1109,6 @@ with tab4:
                 totales['items'] += items
                 totales['vendido'] += vendido
                 totales['costo_msg'] += costo_msg
-                totales['costo_alist'] += costo_alist
                 totales['utilidad'] += utilidad
 
             # Métricas resumen
@@ -1129,8 +1121,6 @@ with tab4:
             with col3:
                 st.metric("🏍️ Costo Mensajeros", f"${totales['costo_msg']:,.0f}")
             with col4:
-                st.metric("📦 Costo Alistamiento", f"${totales['costo_alist']:,.0f}")
-            with col5:
                 margen_total = (totales['utilidad'] / totales['vendido'] * 100) if totales['vendido'] > 0 else 0
                 st.metric("💰 Utilidad", f"${totales['utilidad']:,.0f}", f"{margen_total:.1f}%")
 
@@ -1213,13 +1203,11 @@ with tab5:
     try:
         cursor = conn.cursor(dictionary=True)
 
-        # ── 1. Ingresos, costos operativos y utilidad por mes ──
+        # ── 1. Ingresos por mes (sin costo_total de ordenes — duplica costos reales) ──
         cursor.execute("""
             SELECT
                 MONTH(o.fecha_recepcion) as mes,
                 SUM(o.valor_total) as ingresos,
-                SUM(o.costo_total) as costos_operativos,
-                SUM(o.utilidad_total) as utilidad_base,
                 SUM(o.cantidad_total) as items_totales
             FROM ordenes o
             WHERE YEAR(o.fecha_recepcion) = %s
@@ -1228,18 +1216,28 @@ with tab5:
         """, (anio_comp,))
         datos_mensuales = cursor.fetchall()
 
-        # ── 2. Costos de mensajeros por mes ──
+        # ── 2. Costos de mensajeros por mes (por fecha de gestión) ──
         cursor.execute("""
             SELECT
-                MONTH(o.fecha_recepcion) as mes,
+                MONTH(gm.fecha_escaner) as mes,
                 SUM(gm.valor_total) as costo_mensajeros
             FROM gestiones_mensajero gm
             JOIN ordenes o ON TRIM(REPLACE(gm.orden, '.0', '')) = TRIM(REPLACE(o.numero_orden, '.0', ''))
-            WHERE YEAR(o.fecha_recepcion) = %s
-            GROUP BY MONTH(o.fecha_recepcion)
+            WHERE YEAR(gm.fecha_escaner) = %s
+            GROUP BY MONTH(gm.fecha_escaner)
             ORDER BY mes
         """, (anio_comp,))
         costos_msg_mes = {r['mes']: float(r['costo_mensajeros'] or 0) for r in cursor.fetchall()}
+
+        # ── 2b. Alistamiento por mes (registro_horas + registro_labores) ──
+        cursor.execute("""
+            SELECT mes, SUM(total) as total_alistamiento FROM (
+                SELECT MONTH(fecha) as mes, total FROM registro_horas WHERE YEAR(fecha) = %s
+                UNION ALL
+                SELECT MONTH(fecha) as mes, total FROM registro_labores WHERE YEAR(fecha) = %s
+            ) t GROUP BY mes ORDER BY mes
+        """, (anio_comp, anio_comp))
+        alistamiento_mes = {r['mes']: float(r['total_alistamiento'] or 0) for r in cursor.fetchall()}
 
         # ── 3. Costos de transporte por mes ──
         cursor.execute("""
@@ -1318,12 +1316,12 @@ with tab5:
             for r in datos_mensuales:
                 m = r['mes']
                 ingresos = float(r['ingresos'] or 0)
-                c_op = float(r['costos_operativos'] or 0)
                 c_msg = costos_msg_mes.get(m, 0)
+                c_alist = alistamiento_mes.get(m, 0)
                 c_transp = costos_transp_mes.get(m, 0)
                 g_admin = gastos_admin_mes.get(m, 0)
                 g_nomina = nomina_mes.get(m, 0)
-                costos_directos = c_op + c_msg + c_transp
+                costos_directos = c_msg + c_alist + c_transp
                 gastos_fijos = g_admin + g_nomina
                 utilidad_bruta = ingresos - costos_directos
                 utilidad_neta = utilidad_bruta - gastos_fijos
@@ -1333,8 +1331,8 @@ with tab5:
                     'mes': m,
                     'mes_nombre': MESES_NOMBRES[m],
                     'ingresos': ingresos,
-                    'costos_operativos': c_op,
                     'costo_mensajeros': c_msg,
+                    'costo_alistamiento': c_alist,
                     'costo_transporte': c_transp,
                     'gastos_admin': g_admin,
                     'nomina': g_nomina,
@@ -1401,12 +1399,12 @@ with tab5:
             # ════════════════════════════════════════════
             st.markdown("### 💸 Desglose de Costos por Mes")
 
-            df_costos_m = df_comp[['mes_nombre', 'costos_operativos', 'costo_mensajeros', 'costo_transporte', 'gastos_admin', 'nomina']].melt(
+            df_costos_m = df_comp[['mes_nombre', 'costo_mensajeros', 'costo_alistamiento', 'costo_transporte', 'gastos_admin', 'nomina']].melt(
                 id_vars='mes_nombre', var_name='Tipo Costo', value_name='Monto'
             )
             nombres_costos = {
-                'costos_operativos': 'Operativos',
                 'costo_mensajeros': 'Mensajeros',
+                'costo_alistamiento': 'Alistamiento',
                 'costo_transporte': 'Transporte',
                 'gastos_admin': 'Gastos Admin',
                 'nomina': 'Nómina'
@@ -1417,7 +1415,7 @@ with tab5:
                 x=alt.X('mes_nombre:N', title='Mes', sort=orden_meses),
                 y=alt.Y('Monto:Q', title='Monto ($)', axis=alt.Axis(format=',.0f'), stack='zero'),
                 color=alt.Color('Tipo Costo:N', scale=alt.Scale(
-                    domain=['Operativos', 'Mensajeros', 'Transporte', 'Gastos Admin', 'Nómina'],
+                    domain=['Mensajeros', 'Alistamiento', 'Transporte', 'Gastos Admin', 'Nómina'],
                     range=['#ff6b6b', '#ffa726', '#42a5f5', '#ab47bc', '#78909c']
                 )),
                 tooltip=[
