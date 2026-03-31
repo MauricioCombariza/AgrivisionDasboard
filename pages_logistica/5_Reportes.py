@@ -305,7 +305,8 @@ with tab1:
         total_seg_social = float(result_nomina['total_seguridad_social'] or 0) if result_nomina else 0
         total_provisiones = float(result_nomina['total_provisiones'] or 0) if result_nomina else 0
 
-        # 4.6 Costos de Alistamiento (registro_horas + registro_labores), filtrado por fecha de trabajo
+        # 4.6 Costos de Alistamiento (registro_horas + registro_labores + subsidio_transporte)
+        # Mismas tablas que usa Facturación → Pago Personal → Alistamiento
         if mes_num:
             cursor.execute("""
                 SELECT SUM(total) as total_alistamiento FROM (
@@ -314,8 +315,11 @@ with tab1:
                     UNION ALL
                     SELECT total FROM registro_labores
                     WHERE YEAR(fecha) = %s AND MONTH(fecha) = %s
+                    UNION ALL
+                    SELECT total FROM subsidio_transporte
+                    WHERE YEAR(fecha) = %s AND MONTH(fecha) = %s
                 ) t
-            """, (anio, mes_num, anio, mes_num))
+            """, (anio, mes_num, anio, mes_num, anio, mes_num))
         else:
             cursor.execute("""
                 SELECT SUM(total) as total_alistamiento FROM (
@@ -324,8 +328,11 @@ with tab1:
                     UNION ALL
                     SELECT total FROM registro_labores
                     WHERE YEAR(fecha) = %s
+                    UNION ALL
+                    SELECT total FROM subsidio_transporte
+                    WHERE YEAR(fecha) = %s
                 ) t
-            """, (anio, anio))
+            """, (anio, anio, anio))
 
         result_alistamiento = cursor.fetchone()
         total_alistamiento = float(result_alistamiento['total_alistamiento'] or 0) if result_alistamiento else 0
@@ -1229,14 +1236,16 @@ with tab5:
         """, (anio_comp,))
         costos_msg_mes = {r['mes']: float(r['costo_mensajeros'] or 0) for r in cursor.fetchall()}
 
-        # ── 2b. Alistamiento por mes (registro_horas + registro_labores) ──
+        # ── 2b. Alistamiento por mes (registro_horas + registro_labores + subsidio_transporte) ──
         cursor.execute("""
             SELECT mes, SUM(total) as total_alistamiento FROM (
                 SELECT MONTH(fecha) as mes, total FROM registro_horas WHERE YEAR(fecha) = %s
                 UNION ALL
                 SELECT MONTH(fecha) as mes, total FROM registro_labores WHERE YEAR(fecha) = %s
+                UNION ALL
+                SELECT MONTH(fecha) as mes, total FROM subsidio_transporte WHERE YEAR(fecha) = %s
             ) t GROUP BY mes ORDER BY mes
-        """, (anio_comp, anio_comp))
+        """, (anio_comp, anio_comp, anio_comp))
         alistamiento_mes = {r['mes']: float(r['total_alistamiento'] or 0) for r in cursor.fetchall()}
 
         # ── 3. Costos de transporte por mes ──
