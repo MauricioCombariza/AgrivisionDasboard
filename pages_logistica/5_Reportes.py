@@ -305,6 +305,31 @@ with tab1:
         total_seg_social = float(result_nomina['total_seguridad_social'] or 0) if result_nomina else 0
         total_provisiones = float(result_nomina['total_provisiones'] or 0) if result_nomina else 0
 
+        # 4.6 Costos de Alistamiento (registro_horas + registro_labores), filtrado por fecha de trabajo
+        if mes_num:
+            cursor.execute("""
+                SELECT SUM(total) as total_alistamiento FROM (
+                    SELECT total FROM registro_horas
+                    WHERE YEAR(fecha) = %s AND MONTH(fecha) = %s
+                    UNION ALL
+                    SELECT total FROM registro_labores
+                    WHERE YEAR(fecha) = %s AND MONTH(fecha) = %s
+                ) t
+            """, (anio, mes_num, anio, mes_num))
+        else:
+            cursor.execute("""
+                SELECT SUM(total) as total_alistamiento FROM (
+                    SELECT total FROM registro_horas
+                    WHERE YEAR(fecha) = %s
+                    UNION ALL
+                    SELECT total FROM registro_labores
+                    WHERE YEAR(fecha) = %s
+                ) t
+            """, (anio, anio))
+
+        result_alistamiento = cursor.fetchone()
+        total_alistamiento = float(result_alistamiento['total_alistamiento'] or 0) if result_alistamiento else 0
+
         # 5. Entregas y devoluciones por cliente - filtrado por fecha de la GESTIÓN (fecha_escaner)
         if mes_num:
             cursor.execute("""
@@ -425,7 +450,7 @@ with tab1:
             # Calcular totales
             total_ingresos = sum([r['ingresos'] for r in datos_procesados])
             total_costos_op = sum([r['costos_operativos'] for r in datos_procesados])
-            total_costos_directos = total_costo_mensajeros + total_costo_transporte
+            total_costos_directos = total_costo_mensajeros + total_costo_transporte + total_alistamiento
             utilidad_bruta = total_ingresos - total_costos_op - total_costos_directos
             total_gastos_fijos = total_gastos_admin + total_nomina
             utilidad_neta = utilidad_bruta - total_gastos_fijos
@@ -481,8 +506,9 @@ with tab1:
                 # Tabla de costos
                 costos_data = {
                     'Concepto': [
-                        '📦 Costos Operativos',
+                        '📦 Costos Operativos (órdenes)',
                         '🏍️ Costo Mensajeros',
+                        '🏭 Alistamiento / Labores',
                         '🚚 Costo Transporte',
                         '🏢 Gastos Administrativos',
                         '👥 Nómina y Provisiones'
@@ -490,6 +516,7 @@ with tab1:
                     'Monto': [
                         f"${total_costos_op:,.0f}",
                         f"${total_costo_mensajeros:,.0f}",
+                        f"${total_alistamiento:,.0f}",
                         f"${total_costo_transporte:,.0f}",
                         f"${total_gastos_admin:,.0f}",
                         f"${total_nomina:,.0f}"
@@ -497,6 +524,7 @@ with tab1:
                     '% de Ingresos': [
                         f"{(total_costos_op/total_ingresos*100) if total_ingresos > 0 else 0:.1f}%",
                         f"{(total_costo_mensajeros/total_ingresos*100) if total_ingresos > 0 else 0:.1f}%",
+                        f"{(total_alistamiento/total_ingresos*100) if total_ingresos > 0 else 0:.1f}%",
                         f"{(total_costo_transporte/total_ingresos*100) if total_ingresos > 0 else 0:.1f}%",
                         f"{(total_gastos_admin/total_ingresos*100) if total_ingresos > 0 else 0:.1f}%",
                         f"{(total_nomina/total_ingresos*100) if total_ingresos > 0 else 0:.1f}%"
@@ -506,7 +534,7 @@ with tab1:
                 st.dataframe(df_costos, use_container_width=True, hide_index=True)
 
                 # Total de costos
-                total_todos_costos = total_costos_op + total_costo_mensajeros + total_costo_transporte + total_gastos_admin + total_nomina
+                total_todos_costos = total_costos_op + total_costo_mensajeros + total_alistamiento + total_costo_transporte + total_gastos_admin + total_nomina
                 st.markdown(f"**Total Costos: ${total_todos_costos:,.0f}** ({(total_todos_costos/total_ingresos*100) if total_ingresos > 0 else 0:.1f}% de ingresos)")
 
             with col2:
