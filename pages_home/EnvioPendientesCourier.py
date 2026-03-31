@@ -31,31 +31,31 @@ def carpeta_hoy():
 
 
 def cargar_couriers():
-    # Intenta remoto primero, cae a local (sin contraseña) si no hay conexión
-    intentos = [
-        {"host": os.getenv("DB_HOST", "204.168.150.196"), "password": os.getenv("DB_PASSWORD", "")},
-        {"host": "localhost", "password": ""},
-    ]
-    for cfg_extra in intentos:
-        try:
-            import mysql.connector
-            conn = mysql.connector.connect(
-                host=cfg_extra["host"],
-                user=os.getenv("DB_USER", "root"),
-                password=cfg_extra["password"],
-                database=os.getenv("DB_NAME_LOGISTICA", "logistica"),
-                connect_timeout=5,
-            )
-            df = pd.read_sql(
-                "SELECT codigo, nombre_completo, email FROM personal "
-                "WHERE activo = TRUE AND tipo_personal = 'courier_externo' ORDER BY nombre_completo",
-                conn,
-            )
+    import mysql.connector
+    QUERY = (
+        "SELECT codigo, nombre_completo, email FROM personal "
+        "WHERE activo = TRUE AND tipo_personal = 'courier_externo' ORDER BY nombre_completo"
+    )
+    # 1) Intenta con get_connection (usa credenciales del .env → remoto)
+    try:
+        conn = get_connection("logistica")
+        if conn:
+            df = pd.read_sql(QUERY, conn)
             conn.close()
             return df
-        except Exception:
-            continue
-    return pd.DataFrame()
+    except Exception:
+        pass
+    # 2) Fallback: localhost sin contraseña
+    try:
+        conn = mysql.connector.connect(
+            host="localhost", user="root", password="",
+            database="logistica", connect_timeout=5,
+        )
+        df = pd.read_sql(QUERY, conn)
+        conn.close()
+        return df
+    except Exception:
+        return pd.DataFrame()
 
 
 def filtrar_pendientes(df_csv, codigos):
