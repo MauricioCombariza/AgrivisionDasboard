@@ -185,8 +185,8 @@ with tab1:
 
         # ============ OBTENER TODOS LOS DATOS ============
 
-        # 1. Costos de mensajeros por cliente - CRUZADO POR ORDEN
-        # Usamos TRIM y REPLACE para normalizar números de orden (quitar .0 si existe)
+        # 1. Costos de mensajeros por cliente - filtrado por fecha de la GESTIÓN (fecha_escaner)
+        # Así se capturan todas las gestiones realizadas en el período, sin importar la fecha de la orden
         if mes_num:
             cursor.execute("""
                 SELECT
@@ -195,7 +195,7 @@ with tab1:
                 FROM gestiones_mensajero gm
                 JOIN ordenes o ON TRIM(REPLACE(gm.orden, '.0', '')) = TRIM(REPLACE(o.numero_orden, '.0', ''))
                 JOIN clientes c ON o.cliente_id = c.id
-                WHERE YEAR(o.fecha_recepcion) = %s AND MONTH(o.fecha_recepcion) = %s
+                WHERE YEAR(gm.fecha_escaner) = %s AND MONTH(gm.fecha_escaner) = %s
                 GROUP BY UPPER(TRIM(c.nombre_empresa))
             """, (anio, mes_num))
         else:
@@ -206,7 +206,7 @@ with tab1:
                 FROM gestiones_mensajero gm
                 JOIN ordenes o ON TRIM(REPLACE(gm.orden, '.0', '')) = TRIM(REPLACE(o.numero_orden, '.0', ''))
                 JOIN clientes c ON o.cliente_id = c.id
-                WHERE YEAR(o.fecha_recepcion) = %s
+                WHERE YEAR(gm.fecha_escaner) = %s
                 GROUP BY UPPER(TRIM(c.nombre_empresa))
             """, (anio,))
 
@@ -305,7 +305,7 @@ with tab1:
         total_seg_social = float(result_nomina['total_seguridad_social'] or 0) if result_nomina else 0
         total_provisiones = float(result_nomina['total_provisiones'] or 0) if result_nomina else 0
 
-        # 5. Entregas y devoluciones por cliente - CRUZADO POR ORDEN
+        # 5. Entregas y devoluciones por cliente - filtrado por fecha de la GESTIÓN (fecha_escaner)
         if mes_num:
             cursor.execute("""
                 SELECT UPPER(TRIM(c.nombre_empresa)) as cliente,
@@ -314,7 +314,7 @@ with tab1:
                 FROM gestiones_mensajero gm
                 JOIN ordenes o ON TRIM(REPLACE(gm.orden, '.0', '')) = TRIM(REPLACE(o.numero_orden, '.0', ''))
                 JOIN clientes c ON o.cliente_id = c.id
-                WHERE YEAR(o.fecha_recepcion) = %s AND MONTH(o.fecha_recepcion) = %s
+                WHERE YEAR(gm.fecha_escaner) = %s AND MONTH(gm.fecha_escaner) = %s
                 GROUP BY UPPER(TRIM(c.nombre_empresa))
             """, (anio, mes_num))
         else:
@@ -325,7 +325,7 @@ with tab1:
                 FROM gestiones_mensajero gm
                 JOIN ordenes o ON TRIM(REPLACE(gm.orden, '.0', '')) = TRIM(REPLACE(o.numero_orden, '.0', ''))
                 JOIN clientes c ON o.cliente_id = c.id
-                WHERE YEAR(o.fecha_recepcion) = %s
+                WHERE YEAR(gm.fecha_escaner) = %s
                 GROUP BY UPPER(TRIM(c.nombre_empresa))
             """, (anio,))
 
