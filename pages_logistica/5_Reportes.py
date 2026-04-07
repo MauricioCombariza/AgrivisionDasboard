@@ -80,12 +80,13 @@ conn = conectar_logistica()
 if not conn:
     st.stop()
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "💰 Rentabilidad General",
     "📦 Estado de Órdenes",
     "👥 Desempeño Personal",
     "📋 Detalle por Orden",
-    "📈 Comparativo Mensual"
+    "📈 Comparativo Mensual",
+    "💳 Cartera y Rentabilidad Real"
 ])
 
 with tab1:
@@ -1625,6 +1626,438 @@ with tab5:
 
         else:
             st.info(f"No hay datos para el año {anio_comp}")
+
+    except Exception as e:
+        st.error(f"Error: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+
+with tab6:
+    st.markdown('<div class="section-header">💳 CARTERA Y RENTABILIDAD REAL</div>', unsafe_allow_html=True)
+
+    col1_r, col2_r = st.columns([1, 1])
+    with col1_r:
+        anio_r = st.selectbox(
+            "📅 Año", options=list(range(2024, 2031)),
+            index=list(range(2024, 2031)).index(date.today().year),
+            key="anio_real"
+        )
+    with col2_r:
+        meses_lista_r = ["Todos", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+                         "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+        mes_r = st.selectbox("📆 Mes", meses_lista_r, key="mes_real")
+
+    mes_num_r = meses_lista_r.index(mes_r) if mes_r != "Todos" else None
+
+    try:
+        cursor = conn.cursor(dictionary=True)
+
+        st.markdown('<div class="section-header">👥 COBROS POR CLIENTE</div>', unsafe_allow_html=True)
+
+        # Valor de órdenes (estimado base)
+        if mes_num_r:
+            cursor.execute("""
+                SELECT UPPER(TRIM(c.nombre_empresa)) as cliente, SUM(o.valor_total) as valor_ordenes
+                FROM ordenes o JOIN clientes c ON o.cliente_id = c.id
+                WHERE YEAR(o.fecha_recepcion) = %s AND MONTH(o.fecha_recepcion) = %s
+                GROUP BY UPPER(TRIM(c.nombre_empresa))
+            """, (anio_r, mes_num_r))
+        else:
+            cursor.execute("""
+                SELECT UPPER(TRIM(c.nombre_empresa)) as cliente, SUM(o.valor_total) as valor_ordenes
+                FROM ordenes o JOIN clientes c ON o.cliente_id = c.id
+                WHERE YEAR(o.fecha_recepcion) = %s
+                GROUP BY UPPER(TRIM(c.nombre_empresa))
+            """, (anio_r,))
+        valor_ordenes_cli = {r['cliente']: float(r['valor_ordenes'] or 0) for r in cursor.fetchall()}
+
+        # Facturado y saldo por cliente (por periodo de la factura)
+        if mes_num_r:
+            cursor.execute("""
+                SELECT UPPER(TRIM(c.nombre_empresa)) as cliente,
+                       SUM(fe.total) as facturado,
+                       SUM(fe.saldo_pendiente) as saldo_pendiente
+                FROM facturas_emitidas fe JOIN clientes c ON fe.cliente_id = c.id
+                WHERE fe.periodo_anio = %s AND fe.periodo_mes = %s AND fe.estado != 'anulada'
+                GROUP BY UPPER(TRIM(c.nombre_empresa))
+            """, (anio_r, mes_num_r))
+        else:
+            cursor.execute("""
+                SELECT UPPER(TRIM(c.nombre_empresa)) as cliente,
+                       SUM(fe.total) as facturado,
+                       SUM(fe.saldo_pendiente) as saldo_pendiente
+                FROM facturas_emitidas fe JOIN clientes c ON fe.cliente_id = c.id
+                WHERE fe.periodo_anio = %s AND fe.estado != 'anulada'
+                GROUP BY UPPER(TRIM(c.nombre_empresa))
+            """, (anio_r,))
+        facturado_cli = {r['cliente']: {
+            'facturado': float(r['facturado'] or 0),
+            'saldo': float(r['saldo_pendiente'] or 0)
+        } for r in cursor.fetchall()}
+
+        # Cobrado: pagos recibidos sobre facturas del período
+        if mes_num_r:
+            cursor.execute("""
+                SELECT UPPER(TRIM(c.nombre_empresa)) as cliente, SUM(pr.monto) as cobrado
+                FROM pagos_recibidos pr
+                JOIN facturas_emitidas fe ON pr.factura_id = fe.id
+                JOIN clientes c ON fe.cliente_id = c.id
+                WHERE fe.periodo_anio = %s AND fe.periodo_mes = %s AND fe.estado != 'anulada'
+                GROUP BY UPPER(TRIM(c.nombre_empresa))
+            """, (anio_r, mes_num_r))
+        else:
+            cursor.execute("""
+                SELECT UPPER(TRIM(c.nombre_empresa)) as cliente, SUM(pr.monto) as cobrado
+                FROM pagos_recibidos pr
+                JOIN facturas_emitidas fe ON pr.factura_id = fe.id
+                JOIN clientes c ON fe.cliente_id = c.id
+                WHERE fe.periodo_anio = %s AND fe.estado != 'anulada'
+                GROUP BY UPPER(TRIM(c.nombre_empresa))
+            """, (anio_r,))
+        cobrado_cli = {r['cliente']: float(r['cobrado'] or 0) for r in cursor.fetchall()}
+
+        # Construir tabla clientes
+        todos_clientes_r = set(valor_ordenes_cli.keys()) | set(facturado_cli.keys()) | set(cobrado_cli.keys())
+        filas_cli = []
+        for cli in sorted(todos_clientes_r):
+            ordenes_val = valor_ordenes_cli.get(cli, 0)
+            fac_data = facturado_cli.get(cli, {})
+            facturado = fac_data.get('facturado', 0)
+            saldo = fac_data.get('saldo', 0)
+            cobrado = cobrado_cli.get(cli, 0)
+            filas_cli.append({
+                'Cliente': cli,
+                'Valor Órdenes': ordenes_val,
+                'Facturado': facturado,
+                'Cobrado': cobrado,
+                'Saldo Pendiente': saldo
+            })
+
+        if filas_cli:
+            df_cli_r = pd.DataFrame(filas_cli)
+            tot_ordenes_r = df_cli_r['Valor Órdenes'].sum()
+            tot_facturado_r = df_cli_r['Facturado'].sum()
+            tot_cobrado_r = df_cli_r['Cobrado'].sum()
+            tot_saldo_r = df_cli_r['Saldo Pendiente'].sum()
+
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("📋 Valor Órdenes", f"${tot_ordenes_r:,.0f}")
+            with col2:
+                st.metric("🧾 Total Facturado", f"${tot_facturado_r:,.0f}")
+            with col3:
+                st.metric("✅ Total Cobrado", f"${tot_cobrado_r:,.0f}")
+            with col4:
+                st.metric("⏳ Saldo por Cobrar", f"${tot_saldo_r:,.0f}", delta_color="inverse")
+
+            df_cli_display = df_cli_r.copy()
+            for col_n in ['Valor Órdenes', 'Facturado', 'Cobrado', 'Saldo Pendiente']:
+                df_cli_display[col_n] = df_cli_display[col_n].apply(lambda x: f"${x:,.0f}")
+            st.dataframe(df_cli_display, use_container_width=True, hide_index=True)
+        else:
+            tot_ordenes_r = tot_facturado_r = tot_cobrado_r = tot_saldo_r = 0
+            st.info("No hay datos de clientes para el período seleccionado")
+
+        st.markdown("---")
+
+        st.markdown('<div class="section-header">🏍️ PAGOS A MENSAJEROS</div>', unsafe_allow_html=True)
+
+        if mes_num_r:
+            cursor.execute("""
+                SELECT p.nombre_completo, p.codigo,
+                       COUNT(DISTINCT gm.lot_esc) as planillas,
+                       SUM(gm.total_seriales) as seriales,
+                       SUM(gm.valor_total) as estimado,
+                       SUM(CASE WHEN gm.facturado_liq IS NOT NULL THEN gm.valor_total ELSE 0 END) as en_liq,
+                       SUM(CASE WHEN fr.estado = 'pagada' THEN gm.valor_total ELSE 0 END) as pagado
+                FROM gestiones_mensajero gm
+                JOIN personal p ON CAST(gm.cod_mensajero AS UNSIGNED) = CAST(p.codigo AS UNSIGNED)
+                LEFT JOIN facturas_recibidas fr ON gm.facturado_liq = fr.id
+                WHERE YEAR(gm.fecha_escaner) = %s AND MONTH(gm.fecha_escaner) = %s
+                GROUP BY p.id, p.nombre_completo, p.codigo
+                ORDER BY p.nombre_completo
+            """, (anio_r, mes_num_r))
+        else:
+            cursor.execute("""
+                SELECT p.nombre_completo, p.codigo,
+                       COUNT(DISTINCT gm.lot_esc) as planillas,
+                       SUM(gm.total_seriales) as seriales,
+                       SUM(gm.valor_total) as estimado,
+                       SUM(CASE WHEN gm.facturado_liq IS NOT NULL THEN gm.valor_total ELSE 0 END) as en_liq,
+                       SUM(CASE WHEN fr.estado = 'pagada' THEN gm.valor_total ELSE 0 END) as pagado
+                FROM gestiones_mensajero gm
+                JOIN personal p ON CAST(gm.cod_mensajero AS UNSIGNED) = CAST(p.codigo AS UNSIGNED)
+                LEFT JOIN facturas_recibidas fr ON gm.facturado_liq = fr.id
+                WHERE YEAR(gm.fecha_escaner) = %s
+                GROUP BY p.id, p.nombre_completo, p.codigo
+                ORDER BY p.nombre_completo
+            """, (anio_r,))
+        estimado_msg = {r['codigo']: {
+            'nombre': r['nombre_completo'],
+            'planillas': int(r['planillas'] or 0),
+            'seriales': int(r['seriales'] or 0),
+            'estimado': float(r['estimado'] or 0),
+            'en_liq': float(r['en_liq'] or 0),
+            'pagado': float(r['pagado'] or 0),
+        } for r in cursor.fetchall()}
+
+        if estimado_msg:
+            filas_msg = []
+            for cod, data in estimado_msg.items():
+                en_liq = data['en_liq']
+                pagado = data['pagado']
+                pendiente = data['estimado'] - pagado
+                filas_msg.append({
+                    'Mensajero': data['nombre'],
+                    'Planillas': data['planillas'],
+                    'Seriales': data['seriales'],
+                    'Total Gestiones': data['estimado'],
+                    'En Liquidación': en_liq,
+                    'Pagado': pagado,
+                    'Pendiente': pendiente
+                })
+
+            df_msg = pd.DataFrame(filas_msg)
+            tot_msg_estimado = df_msg['Total Gestiones'].sum()
+            tot_msg_en_liq = df_msg['En Liquidación'].sum()
+            tot_msg_pagado = df_msg['Pagado'].sum()
+            tot_msg_pendiente = df_msg['Pendiente'].sum()
+
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("📋 Total Gestiones", f"${tot_msg_estimado:,.0f}")
+            with col2:
+                st.metric("📄 En Liquidación", f"${tot_msg_en_liq:,.0f}")
+            with col3:
+                st.metric("✅ Pagado", f"${tot_msg_pagado:,.0f}")
+            with col4:
+                st.metric("⏳ Pendiente", f"${tot_msg_pendiente:,.0f}", delta_color="inverse")
+
+            df_msg_display = df_msg.copy()
+            for col_n in ['Total Gestiones', 'En Liquidación', 'Pagado', 'Pendiente']:
+                df_msg_display[col_n] = df_msg_display[col_n].apply(lambda x: f"${x:,.0f}")
+            df_msg_display['Seriales'] = df_msg_display['Seriales'].apply(lambda x: f"{int(x):,}")
+            st.dataframe(df_msg_display, use_container_width=True, hide_index=True)
+        else:
+            tot_msg_estimado = tot_msg_en_liq = tot_msg_pagado = tot_msg_pendiente = 0
+            st.info("No hay gestiones de mensajeros en el período")
+
+        st.markdown("---")
+
+        st.markdown('<div class="section-header">🏭 PAGOS DE ALISTAMIENTO</div>', unsafe_allow_html=True)
+
+        if mes_num_r:
+            cursor.execute("""
+                SELECT p.nombre_completo, p.codigo,
+                       SUM(combined.total) as estimado,
+                       SUM(CASE WHEN combined.liquidado = 1 THEN combined.total ELSE 0 END) as pagado
+                FROM (
+                    SELECT personal_id, total, liquidado FROM registro_horas
+                    WHERE YEAR(fecha) = %s AND MONTH(fecha) = %s
+                    UNION ALL
+                    SELECT personal_id, total, liquidado FROM registro_labores
+                    WHERE YEAR(fecha) = %s AND MONTH(fecha) = %s
+                ) combined
+                JOIN personal p ON combined.personal_id = p.id
+                GROUP BY p.id, p.nombre_completo, p.codigo
+                ORDER BY p.nombre_completo
+            """, (anio_r, mes_num_r, anio_r, mes_num_r))
+        else:
+            cursor.execute("""
+                SELECT p.nombre_completo, p.codigo,
+                       SUM(combined.total) as estimado,
+                       SUM(CASE WHEN combined.liquidado = 1 THEN combined.total ELSE 0 END) as pagado
+                FROM (
+                    SELECT personal_id, total, liquidado FROM registro_horas WHERE YEAR(fecha) = %s
+                    UNION ALL
+                    SELECT personal_id, total, liquidado FROM registro_labores WHERE YEAR(fecha) = %s
+                ) combined
+                JOIN personal p ON combined.personal_id = p.id
+                GROUP BY p.id, p.nombre_completo, p.codigo
+                ORDER BY p.nombre_completo
+            """, (anio_r, anio_r))
+        estimado_alist = {r['codigo']: {
+            'nombre': r['nombre_completo'],
+            'estimado': float(r['estimado'] or 0),
+            'pagado': float(r['pagado'] or 0),
+        } for r in cursor.fetchall()}
+
+        if estimado_alist:
+            filas_alist = []
+            for cod, data in estimado_alist.items():
+                pagado_a = data['pagado']
+                pendiente_a = data['estimado'] - pagado_a
+                filas_alist.append({
+                    'Personal': data['nombre'],
+                    'Total Registrado': data['estimado'],
+                    'Pagado': pagado_a,
+                    'Pendiente': pendiente_a
+                })
+
+            df_alist = pd.DataFrame(filas_alist)
+            tot_alist_estimado = df_alist['Total Registrado'].sum()
+            tot_alist_pagado = df_alist['Pagado'].sum()
+            tot_alist_pendiente = df_alist['Pendiente'].sum()
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("📋 Total Registrado", f"${tot_alist_estimado:,.0f}")
+            with col2:
+                st.metric("✅ Pagado", f"${tot_alist_pagado:,.0f}")
+            with col3:
+                st.metric("⏳ Pendiente", f"${tot_alist_pendiente:,.0f}", delta_color="inverse")
+
+            df_alist_display = df_alist.copy()
+            for col_n in ['Total Registrado', 'Pagado', 'Pendiente']:
+                df_alist_display[col_n] = df_alist_display[col_n].apply(lambda x: f"${x:,.0f}")
+            st.dataframe(df_alist_display, use_container_width=True, hide_index=True)
+        else:
+            tot_alist_estimado = tot_alist_pagado = tot_alist_pendiente = 0
+            st.info("No hay registros de alistamiento en el período")
+
+        st.markdown("---")
+
+        st.markdown('<div class="section-header">💰 RENTABILIDAD REAL vs. ESTIMADA</div>', unsafe_allow_html=True)
+
+        # Transporte (sin tracking de pagado/pendiente)
+        if mes_num_r:
+            cursor.execute("""
+                SELECT SUM(dft.costo_asignado) as total
+                FROM detalle_facturas_transporte dft
+                JOIN facturas_transporte ft ON dft.factura_id = ft.id
+                WHERE YEAR(ft.fecha_factura) = %s AND MONTH(ft.fecha_factura) = %s
+                AND ft.estado != 'anulada'
+            """, (anio_r, mes_num_r))
+        else:
+            cursor.execute("""
+                SELECT SUM(dft.costo_asignado) as total
+                FROM detalle_facturas_transporte dft
+                JOIN facturas_transporte ft ON dft.factura_id = ft.id
+                WHERE YEAR(ft.fecha_factura) = %s AND ft.estado != 'anulada'
+            """, (anio_r,))
+        r_transp_r = cursor.fetchone()
+        costo_transp_r = float(r_transp_r['total'] or 0) if r_transp_r else 0
+
+        # Gastos admin
+        if mes_num_r:
+            cursor.execute("""
+                SELECT SUM(monto) as total FROM gastos_administrativos
+                WHERE YEAR(fecha) = %s AND MONTH(fecha) = %s
+            """, (anio_r, mes_num_r))
+        else:
+            cursor.execute("""
+                SELECT SUM(monto) as total FROM gastos_administrativos WHERE YEAR(fecha) = %s
+            """, (anio_r,))
+        r_ga_r = cursor.fetchone()
+        gastos_admin_r = float(r_ga_r['total'] or 0) if r_ga_r else 0
+
+        # Nómina
+        if mes_num_r:
+            cursor.execute("""
+                SELECT SUM(costo_total_empleado) as total FROM nomina_provisiones
+                WHERE periodo_anio = %s AND periodo_mes = %s
+            """, (anio_r, mes_num_r))
+        else:
+            cursor.execute("""
+                SELECT SUM(costo_total_empleado) as total FROM nomina_provisiones WHERE periodo_anio = %s
+            """, (anio_r,))
+        r_nom_r = cursor.fetchone()
+        nomina_r = float(r_nom_r['total'] or 0) if r_nom_r else 0
+
+        gastos_fijos_r = gastos_admin_r + nomina_r
+
+        # ── Calcular P&L ──
+        # Estimado
+        costos_directos_estimados = tot_msg_estimado + tot_alist_estimado + costo_transp_r
+        utilidad_estimada = tot_ordenes_r - costos_directos_estimados - gastos_fijos_r
+
+        # Real: facturado a clientes vs pagado a mensajeros/alistamiento
+        costos_directos_reales = tot_msg_pagado + tot_alist_pagado + costo_transp_r
+        utilidad_real_facturada = tot_facturado_r - costos_directos_reales - gastos_fijos_r
+        utilidad_real_cobrada = tot_cobrado_r - costos_directos_reales - gastos_fijos_r
+
+        # Métricas principales
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("📋 Valor Órdenes", f"${tot_ordenes_r:,.0f}",
+                      delta=f"Utilidad est. ${utilidad_estimada:,.0f}")
+        with col2:
+            st.metric("🧾 Total Facturado", f"${tot_facturado_r:,.0f}",
+                      delta=f"Utilidad ${utilidad_real_facturada:,.0f}")
+        with col3:
+            st.metric("✅ Total Cobrado", f"${tot_cobrado_r:,.0f}",
+                      delta=f"Utilidad cobrada ${utilidad_real_cobrada:,.0f}")
+        with col4:
+            diferencia = tot_facturado_r - tot_ordenes_r
+            st.metric("📊 Facturado vs Órdenes", f"${diferencia:,.0f}",
+                      delta=f"{'▲' if diferencia >= 0 else '▼'} vs valor órdenes",
+                      delta_color="normal" if diferencia >= 0 else "inverse")
+
+        st.markdown("---")
+
+        # Tabla P&L comparativo
+        pnl_data = [
+            {
+                'Concepto': '💵 Ingresos',
+                'Estimado (Órdenes)': tot_ordenes_r,
+                'Facturado': tot_facturado_r,
+                'Cobrado Real': tot_cobrado_r
+            },
+            {
+                'Concepto': '🏍️ (−) Mensajeros',
+                'Estimado (Órdenes)': tot_msg_estimado,
+                'Facturado': tot_msg_en_liq,
+                'Cobrado Real': tot_msg_pagado
+            },
+            {
+                'Concepto': '🏭 (−) Alistamiento',
+                'Estimado (Órdenes)': tot_alist_estimado,
+                'Facturado': tot_alist_estimado,
+                'Cobrado Real': tot_alist_pagado
+            },
+            {
+                'Concepto': '🚚 (−) Transporte',
+                'Estimado (Órdenes)': costo_transp_r,
+                'Facturado': costo_transp_r,
+                'Cobrado Real': costo_transp_r
+            },
+            {
+                'Concepto': '🏢 (−) Gastos Admin',
+                'Estimado (Órdenes)': gastos_admin_r,
+                'Facturado': gastos_admin_r,
+                'Cobrado Real': gastos_admin_r
+            },
+            {
+                'Concepto': '👥 (−) Nómina',
+                'Estimado (Órdenes)': nomina_r,
+                'Facturado': nomina_r,
+                'Cobrado Real': nomina_r
+            },
+            {
+                'Concepto': '── Total Costos',
+                'Estimado (Órdenes)': costos_directos_estimados + gastos_fijos_r,
+                'Facturado': tot_msg_en_liq + tot_alist_estimado + costo_transp_r + gastos_fijos_r,
+                'Cobrado Real': costos_directos_reales + gastos_fijos_r
+            },
+            {
+                'Concepto': '💰 UTILIDAD',
+                'Estimado (Órdenes)': utilidad_estimada,
+                'Facturado': utilidad_real_facturada,
+                'Cobrado Real': utilidad_real_cobrada
+            },
+        ]
+
+        df_pnl = pd.DataFrame(pnl_data)
+        df_pnl_display = df_pnl.copy()
+        for col_n in ['Estimado (Órdenes)', 'Facturado', 'Cobrado Real']:
+            df_pnl_display[col_n] = df_pnl_display[col_n].apply(lambda x: f"${x:,.0f}")
+        st.dataframe(df_pnl_display, use_container_width=True, hide_index=True)
+
+        st.caption(
+            "**Estimado**: basado en valor de órdenes y total de gestiones/alistamiento del período. "
+            "**Facturado**: lo facturado a clientes / gestiones en liquidación. "
+            "**Cobrado Real**: pagos recibidos de clientes vs pagos realizados a mensajeros/alistamiento (liquidado=pagado)."
+        )
 
     except Exception as e:
         st.error(f"Error: {e}")
