@@ -280,8 +280,10 @@ with tab2:
             SELECT
                 ft.id, ft.numero_factura, ft.fecha_factura,
                 p.nombre_completo as courrier,
+                ft.courrier_id,
                 ft.monto_total, ft.total_sobres, ft.estado,
                 ft.fecha_vencimiento, ft.monto_pagado,
+                ft.observaciones,
                 COUNT(dft.id) as num_ordenes,
                 COALESCE(SUM(dft.costo_asignado), 0) as total_asignado
             FROM facturas_transporte ft
@@ -418,6 +420,27 @@ with tab2:
             st.divider()
             st.markdown("### Todas las Facturas del Periodo")
 
+            # Courriers para el selector de edición
+            cursor.execute("""
+                SELECT id, codigo, nombre_completo FROM personal
+                WHERE activo = TRUE AND tipo_personal IN ('courier_externo', 'transportadora')
+                ORDER BY nombre_completo
+            """)
+            edit_courrier_opts = {
+                f"{c['codigo']} - {c['nombre_completo']}": c['id']
+                for c in cursor.fetchall()
+            }
+
+            # Órdenes activas para agregar a facturas existentes
+            cursor.execute("""
+                SELECT o.id, o.numero_orden, c.nombre_empresa as cliente
+                FROM ordenes o
+                JOIN clientes c ON o.cliente_id = c.id
+                WHERE o.estado = 'activa'
+                ORDER BY o.fecha_recepcion DESC, c.nombre_empresa
+            """)
+            todas_ordenes = cursor.fetchall()
+
             for factura in facturas:
                 estado_icon = "🟢" if factura['estado'] == 'pagada' else "🟡" if factura['estado'] == 'pendiente' else "🔴"
                 fid = factura['id']
@@ -443,28 +466,132 @@ with tab2:
                         else:
                             st.metric("Estado", factura['estado'].capitalize())
 
-                    # Detalle de ordenes
+                    # ── Órdenes de la factura con opción de quitar ───────
                     cursor.execute("""
-                        SELECT o.numero_orden, c.nombre_empresa as cliente,
-                               dft.cantidad_sobres, dft.costo_asignado
+                        SELECT dft.id as detalle_id, dft.orden_id,
+                               dft.cantidad_sobres, dft.costo_asignado,
+                               o.numero_orden, c.nombre_empresa as cliente
                         FROM detalle_facturas_transporte dft
                         JOIN ordenes o ON dft.orden_id = o.id
                         JOIN clientes c ON o.cliente_id = c.id
                         WHERE dft.factura_id = %s
                         ORDER BY c.nombre_empresa
-                    """, (factura['id'],))
+                    """, (fid,))
                     detalles = cursor.fetchall()
-                    if detalles:
-                        st.markdown("**Detalle por Orden:**")
-                        df_detalle = pd.DataFrame(detalles)
-                        df_detalle['porcentaje'] = (df_detalle['cantidad_sobres'] / factura['total_sobres'] * 100).round(2).astype(str) + '%'
-                        df_detalle['costo_asignado'] = df_detalle['costo_asignado'].apply(lambda x: f"${x:,.2f}")
-                        df_detalle.columns = ['Orden', 'Cliente', 'Sobres', 'Costo', '%']
-                        st.dataframe(df_detalle[['Orden', 'Cliente', 'Sobres', '%', 'Costo']], use_container_width=True, hide_index=True)
 
-                    # Edicion completa
+                    if detalles:
+                        st.markdown("**Órdenes de la factura:**")
+                        hdr = st.columns([2, 2, 1, 2, 1])
+                        for lbl, col in zip(["Orden", "Cliente", "Sobres", "% · Costo", ""], hdr):
+                            col.markdown(f"**{lbl}**")
+                        for det in detalles:
+                            pct = det['cantidad_sobres'] / factura['total_sobres'] * 100 if factura['total_sobres'] else 0
+                            dc1, dc2, dc3, dc4, dc5 = st.columns([2, 2, 1, 2, 1])
+                            dc1.write(det['numero_orden'])
+                            dc2.write(det['cliente'])
+                            dc3.write(str(det['cantidad_sobres']))
+                            dc4.write(f"{pct:.1f}%  ·  ${float(det['costo_asignado']):,.0f}")
+                            if dc5.button("❌", key=f"quitar_det_{det['detalle_id']}", help="Quitar esta orden"):
+                                try:
+                                    c2 = conn.cursor(dictionary=True)
+                                    old_sobres = int(det['cantidad_sobres'])
+                                    old_costo  = float(det['costo_asignado'])
+                                    new_total  = max(0, int(factura['total_sobres']) - old_sobres)
+                                    monto_ft   = float(factura['monto_total'])
+
+                                    # Revertir costo en la orden
+                                    c2.execute("""
+                                        UPDATE ordenes
+                                        SET costo_flete_total = GREATEST(0, COALESCE(costo_flete_total, 0) - %s)
+                                        WHERE id = %s
+                                    """, (old_costo, det['orden_id']))
+
+                                    # Eliminar línea de detalle
+                                    c2.execute("DELETE FROM detalle_facturas_transporte WHERE id = %s", (det['detalle_id'],))
+
+                                    # Actualizar total_sobres en la factura
+                                    c2.execute("UPDATE facturas_transporte SET total_sobres = %s WHERE id = %s", (new_total, fid))
+
+                                    # Recalcular proporciones en las líneas restantes
+                                    if new_total > 0:
+                                        c2.execute("""
+                                            SELECT id, orden_id, cantidad_sobres, costo_asignado
+                                            FROM detalle_facturas_transporte WHERE factura_id = %s
+                                        """, (fid,))
+                                        for rem in c2.fetchall():
+                                            nc = monto_ft * rem['cantidad_sobres'] / new_total
+                                            delta = nc - float(rem['costo_asignado'])
+                                            c2.execute("UPDATE detalle_facturas_transporte SET costo_asignado = %s WHERE id = %s", (nc, rem['id']))
+                                            if abs(delta) > 0.01:
+                                                c2.execute("""
+                                                    UPDATE ordenes SET costo_flete_total = COALESCE(costo_flete_total, 0) + %s WHERE id = %s
+                                                """, (delta, rem['orden_id']))
+
+                                    conn.commit()
+                                    c2.close()
+                                    st.success(f"Orden {det['numero_orden']} removida y costos recalculados")
+                                    st.rerun()
+                                except Exception as e_q:
+                                    conn.rollback()
+                                    st.error(f"Error al quitar: {e_q}")
+
+                    # ── Agregar orden a la factura ────────────────────────
+                    st.markdown("**Agregar orden:**")
+                    ordenes_en_factura = {det['orden_id'] for det in (detalles or [])}
+                    ordenes_disponibles = [o for o in todas_ordenes if o['id'] not in ordenes_en_factura]
+                    col_ao1, col_ao2, col_ao3 = st.columns([3, 1, 1])
+                    with col_ao1:
+                        add_ord_opts = {f"{o['numero_orden']} - {o['cliente']}": o for o in ordenes_disponibles}
+                        add_ord_sel = st.selectbox("Orden a agregar", options=[""] + list(add_ord_opts.keys()), key=f"add_ord_sel_{fid}")
+                    with col_ao2:
+                        add_sobres = st.number_input("Sobres", min_value=1, value=1, step=1, key=f"add_sobres_{fid}")
+                    with col_ao3:
+                        st.write("")
+                        st.write("")
+                        if st.button("➕ Agregar", key=f"add_ord_btn_{fid}"):
+                            if add_ord_sel:
+                                orden_data = add_ord_opts[add_ord_sel]
+                                new_total = int(factura['total_sobres']) + add_sobres
+                                monto_ft  = float(factura['monto_total'])
+                                try:
+                                    c2 = conn.cursor(dictionary=True)
+                                    # Recalcular líneas existentes con el nuevo total de sobres
+                                    c2.execute("""
+                                        SELECT id, orden_id, cantidad_sobres, costo_asignado
+                                        FROM detalle_facturas_transporte WHERE factura_id = %s
+                                    """, (fid,))
+                                    for ex in c2.fetchall():
+                                        nc = monto_ft * ex['cantidad_sobres'] / new_total
+                                        delta = nc - float(ex['costo_asignado'])
+                                        c2.execute("UPDATE detalle_facturas_transporte SET costo_asignado = %s WHERE id = %s", (nc, ex['id']))
+                                        if abs(delta) > 0.01:
+                                            c2.execute("""
+                                                UPDATE ordenes SET costo_flete_total = COALESCE(costo_flete_total, 0) + %s WHERE id = %s
+                                            """, (delta, ex['orden_id']))
+                                    # Insertar nueva línea
+                                    nc_new = monto_ft * add_sobres / new_total
+                                    c2.execute("""
+                                        INSERT INTO detalle_facturas_transporte (factura_id, orden_id, cantidad_sobres, costo_asignado)
+                                        VALUES (%s, %s, %s, %s)
+                                    """, (fid, orden_data['id'], add_sobres, nc_new))
+                                    c2.execute("""
+                                        UPDATE ordenes SET costo_flete_total = COALESCE(costo_flete_total, 0) + %s WHERE id = %s
+                                    """, (nc_new, orden_data['id']))
+                                    c2.execute("UPDATE facturas_transporte SET total_sobres = %s WHERE id = %s", (new_total, fid))
+                                    conn.commit()
+                                    c2.close()
+                                    st.success(f"Orden {orden_data['numero_orden']} agregada y costos recalculados")
+                                    st.rerun()
+                                except Exception as e_a:
+                                    conn.rollback()
+                                    st.error(f"Error al agregar: {e_a}")
+                            else:
+                                st.warning("Selecciona una orden para agregar")
+
+                    # ── Editar cabecera ───────────────────────────────────
                     st.markdown("---")
                     st.markdown("**Editar Factura**")
+
                     col_e1, col_e2, col_e3, col_e4 = st.columns(4)
                     with col_e1:
                         edit_num_factura = st.text_input("Numero Factura", value=factura['numero_factura'], key=f"edit_num_{fid}")
@@ -480,15 +607,23 @@ with tab2:
                         edit_monto = st.number_input("Monto Total", min_value=0.0, step=1000.0, format="%.2f",
                                                      value=float(factura['monto_total']), key=f"edit_monto_{fid}")
 
-                    col_est, col_pagado, col_btn = st.columns([1, 1, 2])
-                    with col_est:
+                    col_e5, col_e6, col_e7 = st.columns([1, 1, 2])
+                    with col_e5:
+                        # Preseleccionar el courrier actual de la factura
+                        edit_cour_keys = list(edit_courrier_opts.keys())
+                        try:
+                            cour_default = list(edit_courrier_opts.values()).index(factura['courrier_id'])
+                        except ValueError:
+                            cour_default = 0
+                        edit_cour_sel = st.selectbox("Courrier", options=edit_cour_keys, index=cour_default, key=f"edit_cour_{fid}")
+                        edit_courrier_id = edit_courrier_opts[edit_cour_sel]
+                    with col_e6:
                         nuevo_estado = st.selectbox(
                             "Estado",
                             ['pendiente', 'pagada', 'anulada'],
                             index=['pendiente', 'pagada', 'anulada'].index(factura['estado']),
                             key=f"estado_{fid}"
                         )
-                    with col_pagado:
                         edit_monto_pagado = st.number_input(
                             "Monto Pagado",
                             min_value=0.0, step=1000.0, format="%.2f",
@@ -501,29 +636,55 @@ with tab2:
                                 st.caption(f"Descuento: ${abs(diferencia):,.0f}")
                             elif diferencia > 0:
                                 st.caption(f"Penalizacion: +${diferencia:,.0f}")
-                    with col_btn:
-                        st.write("")
-                        st.write("")
-                        if st.button("Guardar Cambios", key=f"btn_{fid}"):
-                            try:
-                                monto_pagado_guardar = edit_monto_pagado if edit_monto_pagado > 0 else None
-                                cursor2 = conn.cursor()
+                    with col_e7:
+                        edit_obs = st.text_area(
+                            "Observaciones",
+                            value=factura.get('observaciones') or '',
+                            height=100,
+                            key=f"edit_obs_{fid}"
+                        )
+
+                    if st.button("💾 Guardar Cambios", key=f"btn_{fid}", type="primary"):
+                        try:
+                            monto_pagado_guardar = edit_monto_pagado if edit_monto_pagado > 0 else None
+                            cursor2 = conn.cursor(dictionary=True)
+
+                            # Si cambió el monto, propagar a detalle y a ordenes.costo_flete_total
+                            if abs(edit_monto - float(factura['monto_total'])) > 0.01 and factura['total_sobres'] > 0:
                                 cursor2.execute("""
-                                    UPDATE facturas_transporte
-                                    SET numero_factura = %s, fecha_factura = %s,
-                                        fecha_vencimiento = %s, monto_total = %s,
-                                        estado = %s, monto_pagado = %s
-                                    WHERE id = %s
-                                """, (edit_num_factura, edit_fecha_factura,
-                                      edit_fecha_venc, edit_monto,
-                                      nuevo_estado, monto_pagado_guardar, fid))
-                                conn.commit()
-                                cursor2.close()
-                                st.success("Factura actualizada")
-                                st.rerun()
-                            except Exception as e:
-                                conn.rollback()
-                                st.error(f"Error al actualizar: {e}")
+                                    SELECT id, orden_id, cantidad_sobres, costo_asignado
+                                    FROM detalle_facturas_transporte WHERE factura_id = %s
+                                """, (fid,))
+                                for det in cursor2.fetchall():
+                                    new_costo = edit_monto * det['cantidad_sobres'] / factura['total_sobres']
+                                    delta = new_costo - float(det['costo_asignado'])
+                                    cursor2.execute(
+                                        "UPDATE detalle_facturas_transporte SET costo_asignado = %s WHERE id = %s",
+                                        (new_costo, det['id'])
+                                    )
+                                    if abs(delta) > 0.01:
+                                        cursor2.execute("""
+                                            UPDATE ordenes SET costo_flete_total = COALESCE(costo_flete_total, 0) + %s WHERE id = %s
+                                        """, (delta, det['orden_id']))
+
+                            cursor2.execute("""
+                                UPDATE facturas_transporte
+                                SET numero_factura = %s, fecha_factura = %s,
+                                    fecha_vencimiento = %s, monto_total = %s,
+                                    estado = %s, monto_pagado = %s,
+                                    courrier_id = %s, observaciones = %s
+                                WHERE id = %s
+                            """, (edit_num_factura, edit_fecha_factura,
+                                  edit_fecha_venc, edit_monto,
+                                  nuevo_estado, monto_pagado_guardar,
+                                  edit_courrier_id, edit_obs or None, fid))
+                            conn.commit()
+                            cursor2.close()
+                            st.success("Factura actualizada")
+                            st.rerun()
+                        except Exception as e:
+                            conn.rollback()
+                            st.error(f"Error al actualizar: {e}")
 
     except Exception as e:
         st.error(f"Error: {e}")

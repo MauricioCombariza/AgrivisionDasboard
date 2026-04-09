@@ -148,6 +148,18 @@ def sincronizar_periodo(df_periodo, conn_sync):
     except Exception:
         planillas_revisadas_set = set()
 
+    # Planillas que tienen al menos un registro con candado (editado_manualmente=1)
+    # → no se insertan registros nuevos para no contaminar planillas ya corregidas
+    try:
+        _cur_lock = conn_sync.cursor()
+        _cur_lock.execute(
+            "SELECT DISTINCT lot_esc FROM gestiones_mensajero WHERE editado_manualmente = 1"
+        )
+        lotes_con_candado = {r[0] for r in _cur_lock.fetchall()}
+        _cur_lock.close()
+    except Exception:
+        lotes_con_candado = set()
+
     df_p = df_periodo.copy()
 
     # Preparar columnas
@@ -235,7 +247,8 @@ def sincronizar_periodo(df_periodo, conn_sync):
                       float(row['valor_total']), existente[0]))
                 if cursor_reg.rowcount > 0:
                     actualizados += 1
-            else:
+            elif lot_esc_val not in lotes_con_candado:
+                # No insertar si el lote ya tiene registros con candado (planilla corregida manualmente)
                 m_id = row['mensajero_id'] if pd.notna(row['mensajero_id']) else None
                 cursor_reg.execute("""
                     INSERT INTO gestiones_mensajero

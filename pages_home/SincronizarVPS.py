@@ -5,6 +5,7 @@ import os
 import paramiko
 from datetime import datetime
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor
 
 load_dotenv()
 
@@ -45,6 +46,22 @@ def verificar_conexion_vps():
     except Exception as e:
         return False
 
+# ── Helper: drenar stdout y stderr en paralelo para evitar deadlock SSH ───────
+def _leer_canal(ssh_stdout, ssh_stderr):
+    """
+    Lee stdout y stderr en threads paralelos para evitar el deadlock clásico
+    de Paramiko: si stderr llena el buffer SSH (64 KB) el proceso remoto se
+    bloquea; si stdout.read() espera EOF primero nunca termina.
+    """
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_out = pool.submit(ssh_stdout.read)
+        f_err = pool.submit(ssh_stderr.read)
+        out = f_out.result()
+        err = f_err.result()
+    exit_code = ssh_stdout.channel.recv_exit_status()
+    return out.decode(errors="replace"), err.decode(errors="replace"), exit_code
+
+
 # ── Sincronizar una tabla ─────────────────────────────────────────────────────
 def sincronizar_tabla(db, tabla, ssh_client, sftp, progreso_placeholder, log):
     try:
@@ -71,13 +88,9 @@ def sincronizar_tabla(db, tabla, ssh_client, sftp, progreso_placeholder, log):
 
         # 3. Importar en VPS
         cmd_import = f"mysql -u{VPS_DB_USER} -p{VPS_DB_PASS} {db} < {ruta_remota} && rm {ruta_remota}"
-        _, stdout, stderr = ssh_client.exec_command(cmd_import, timeout=300)
-        # Leer stdout y stderr ANTES de recv_exit_status para drenar los buffers
-        # del canal SSH y evitar deadlock (si stderr se llena, el proceso remoto
-        # queda bloqueado esperando que se drene, y recv_exit_status nunca retorna)
-        stdout.read()  # usualmente vacío para mysql import
-        err = stderr.read().decode().strip()
-        stdout.channel.recv_exit_status()
+        _stdin, stdout, stderr = ssh_client.exec_command(cmd_import, timeout=300)
+        # Drenar stdout y stderr en paralelo para evitar deadlock SSH
+        _out, err, _rc = _leer_canal(stdout, stderr)
 
         # Ignorar warnings de password (son normales)
         err_real = "\n".join([l for l in err.splitlines() if "Warning" not in l]).strip()
@@ -100,11 +113,9 @@ def descargar_tabla(db, tabla, ssh_client, sftp, log):
     try:
         ruta_remota = f"/tmp/{db}_{tabla}_dl.sql"
         cmd_dump = f"mysqldump -u{VPS_DB_USER} -p{VPS_DB_PASS} --single-transaction --no-tablespaces {db} {tabla} > {ruta_remota}"
-        _, stdout, stderr = ssh_client.exec_command(cmd_dump, timeout=300)
-        # Drenar buffers antes de recv_exit_status para evitar deadlock SSH
-        stdout.read()  # vacío (dump va al archivo via >)
-        stderr.read()  # drenar warnings
-        stdout.channel.recv_exit_status()
+        _stdin, stdout, stderr = ssh_client.exec_command(cmd_dump, timeout=300)
+        # Drenar stdout y stderr en paralelo para evitar deadlock SSH
+        _leer_canal(stdout, stderr)
 
         with tempfile.NamedTemporaryFile(suffix=".sql", delete=False) as f:
             ruta_local = f.name
@@ -158,97 +169,145 @@ if st.button("🔍 Verificar conexión al VPS"):
 
 st.divider()
 
-# Botón de sincronización
-st.markdown("### Sincronizar ahora")
-st.warning("Esto reemplazará los datos en el VPS con los datos locales.")
+# ── Julia (paralelo, sin SFTP) ────────────────────────────────────────────────
+JULIA_SCRIPT = os.path.join(os.path.dirname(__file__), "..", "sync_vps.jl")
 
-if st.button("🚀 Sincronizar con VPS", type="primary"):
-    log = []
-    exitosos = 0
-    fallidos = 0
-
+def _julia_disponible():
     try:
-        with st.spinner("Conectando al VPS..."):
-            client = paramiko.SSHClient()
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(VPS_HOST, username=VPS_USER, key_filename=VPS_KEY, timeout=15)
-            sftp = client.open_sftp()
+        r = subprocess.run(["julia", "--version"], capture_output=True, timeout=5)
+        return r.returncode == 0
+    except Exception:
+        return False
 
-        total_tablas = sum(len(t) for t in TABLAS_SYNC.values())
-        barra = st.progress(0)
-        idx = 0
+def _run_julia(modo):
+    """Ejecuta sync_vps.jl y devuelve (ok, salida)."""
+    try:
+        r = subprocess.run(
+            ["julia", f"-t{os.cpu_count() or 4}", JULIA_SCRIPT, modo],
+            capture_output=True, text=True, timeout=600
+        )
+        salida = r.stdout + (("\n" + r.stderr) if r.stderr.strip() else "")
+        return r.returncode == 0, salida.strip()
+    except subprocess.TimeoutExpired:
+        return False, "❌ Timeout: el script tardó más de 10 minutos"
+    except FileNotFoundError:
+        return False, "❌ `julia` no encontrado. Instálalo o agrega al PATH."
 
-        for db, tablas in TABLAS_SYNC.items():
-            for tabla in tablas:
-                placeholder = st.empty()
-                placeholder.info(f"Sincronizando `{db}.{tabla}`...")
-                exito = sincronizar_tabla(db, tabla, client, sftp, placeholder, log)
-                if exito:
-                    exitosos += 1
-                else:
-                    fallidos += 1
-                idx += 1
-                barra.progress(idx / total_tablas)
-                placeholder.empty()
+st.markdown("### ⚡ Sincronizar con Julia (paralelo)")
+st.caption("Pipeline directo mysqldump → SSH → mysql. Sin archivos temporales. Tablas en paralelo.")
 
-        sftp.close()
-        client.close()
+col_j1, col_j2 = st.columns(2)
 
-        barra.progress(1.0)
+with col_j1:
+    if st.button("🚀 Subir tablas (Julia)", type="primary", key="julia_subir"):
+        with st.spinner("Ejecutando Julia..."):
+            ok, salida = _run_julia("subir")
         hora = datetime.now().strftime("%H:%M:%S")
-
-        if fallidos == 0:
-            st.success(f"✅ Sincronización completada a las {hora} — {exitosos} tablas sincronizadas")
+        if ok:
+            st.success(f"✅ Completado a las {hora}")
         else:
-            st.warning(f"⚠️ Sincronización con errores — {exitosos} ok, {fallidos} fallidas")
+            st.error("❌ Terminó con errores")
+        with st.expander("Salida del script", expanded=True):
+            st.code(salida, language=None)
 
-    except Exception as e:
-        st.error(f"❌ Error de conexión SSH: {e}")
-        log.append(f"❌ SSH: {e}")
-
-    # Mostrar log
-    if log:
-        with st.expander("Ver detalles"):
-            for linea in log:
-                st.write(linea)
+with col_j2:
+    if st.button("⬇️ Bajar personal (Julia)", key="julia_bajar"):
+        with st.spinner("Ejecutando Julia..."):
+            ok, salida = _run_julia("bajar")
+        hora = datetime.now().strftime("%H:%M:%S")
+        if ok:
+            st.success(f"✅ Completado a las {hora}")
+        else:
+            st.error("❌ Terminó con errores")
+        with st.expander("Salida del script", expanded=True):
+            st.code(salida, language=None)
 
 st.divider()
 
-# Bajar tablas del VPS a local
-st.markdown("### Descargar del VPS a local")
-st.info("Descarga tablas que se administran en el VPS (ej. personal) hacia la BD local.")
-for db, tablas in TABLAS_BAJAR.items():
-    for tabla in tablas:
-        st.write(f"• `{db}.{tabla}`")
+# ── Python / Paramiko (fallback) ──────────────────────────────────────────────
+with st.expander("🐍 Versión Python (fallback)", expanded=False):
+    st.warning("Esto reemplazará los datos en el VPS con los datos locales.")
 
-if st.button("⬇️ Descargar personal del VPS", type="secondary"):
-    log2 = []
-    try:
-        with st.spinner("Conectando al VPS..."):
-            client2 = paramiko.SSHClient()
-            client2.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client2.connect(VPS_HOST, username=VPS_USER, key_filename=VPS_KEY, timeout=15)
-            sftp2 = client2.open_sftp()
+    if st.button("🚀 Sincronizar con VPS", type="primary", key="py_subir"):
+        log = []
+        exitosos = 0
+        fallidos = 0
 
-        for db, tablas in TABLAS_BAJAR.items():
-            for tabla in tablas:
-                st.info(f"Descargando `{db}.{tabla}`...")
-                descargar_tabla(db, tabla, client2, sftp2, log2)
+        try:
+            with st.spinner("Conectando al VPS..."):
+                client = paramiko.SSHClient()
+                client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                client.connect(VPS_HOST, username=VPS_USER, key_filename=VPS_KEY, timeout=15)
+                sftp = client.open_sftp()
 
-        sftp2.close()
-        client2.close()
+            total_tablas = sum(len(t) for t in TABLAS_SYNC.values())
+            barra = st.progress(0)
+            idx = 0
 
-        hora = datetime.now().strftime("%H:%M:%S")
-        errores = [l for l in log2 if l.startswith("❌")]
-        if not errores:
-            st.success(f"✅ Descarga completada a las {hora}")
-        else:
-            st.warning("⚠️ Descarga con errores")
-    except Exception as e:
-        st.error(f"❌ Error de conexión SSH: {e}")
-        log2.append(f"❌ SSH: {e}")
+            for db, tablas in TABLAS_SYNC.items():
+                for tabla in tablas:
+                    placeholder = st.empty()
+                    placeholder.info(f"Sincronizando `{db}.{tabla}`...")
+                    exito = sincronizar_tabla(db, tabla, client, sftp, placeholder, log)
+                    if exito:
+                        exitosos += 1
+                    else:
+                        fallidos += 1
+                    idx += 1
+                    barra.progress(idx / total_tablas)
+                    placeholder.empty()
 
-    if log2:
-        with st.expander("Ver detalles"):
-            for linea in log2:
-                st.write(linea)
+            sftp.close()
+            client.close()
+
+            barra.progress(1.0)
+            hora = datetime.now().strftime("%H:%M:%S")
+
+            if fallidos == 0:
+                st.success(f"✅ Sincronización completada a las {hora} — {exitosos} tablas sincronizadas")
+            else:
+                st.warning(f"⚠️ Sincronización con errores — {exitosos} ok, {fallidos} fallidas")
+
+        except Exception as e:
+            st.error(f"❌ Error de conexión SSH: {e}")
+            log.append(f"❌ SSH: {e}")
+
+        if log:
+            with st.expander("Ver detalles"):
+                for linea in log:
+                    st.write(linea)
+
+    st.divider()
+    st.markdown("**Descargar del VPS a local**")
+
+    if st.button("⬇️ Descargar personal del VPS", type="secondary", key="py_bajar"):
+        log2 = []
+        try:
+            with st.spinner("Conectando al VPS..."):
+                client2 = paramiko.SSHClient()
+                client2.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                client2.connect(VPS_HOST, username=VPS_USER, key_filename=VPS_KEY, timeout=15)
+                sftp2 = client2.open_sftp()
+
+            for db, tablas in TABLAS_BAJAR.items():
+                for tabla in tablas:
+                    st.info(f"Descargando `{db}.{tabla}`...")
+                    descargar_tabla(db, tabla, client2, sftp2, log2)
+
+            sftp2.close()
+            client2.close()
+
+            hora = datetime.now().strftime("%H:%M:%S")
+            errores = [l for l in log2 if l.startswith("❌")]
+            if not errores:
+                st.success(f"✅ Descarga completada a las {hora}")
+            else:
+                st.warning("⚠️ Descarga con errores")
+        except Exception as e:
+            st.error(f"❌ Error de conexión SSH: {e}")
+            log2.append(f"❌ SSH: {e}")
+
+        if log2:
+            with st.expander("Ver detalles"):
+                for linea in log2:
+                    st.write(linea)
