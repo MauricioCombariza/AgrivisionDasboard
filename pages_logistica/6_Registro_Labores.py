@@ -662,8 +662,7 @@ with tab1:
                     FROM ordenes o
                     JOIN clientes c ON o.cliente_id = c.id
                     WHERE o.estado = 'activa'
-                    ORDER BY o.numero_orden DESC
-                    LIMIT 100
+                    ORDER BY o.fecha_recepcion DESC, o.id DESC
                 """)
                 ordenes_disponibles = cursor.fetchall()
 
@@ -839,8 +838,7 @@ with tab2:
             FROM ordenes o
             JOIN clientes c ON o.cliente_id = c.id
             WHERE o.estado = 'activa'
-            ORDER BY o.numero_orden DESC
-            LIMIT 100
+            ORDER BY o.fecha_recepcion DESC, o.id DESC
         """)
         ordenes_lab = cursor.fetchall()
         orden_options_lab2 = {
