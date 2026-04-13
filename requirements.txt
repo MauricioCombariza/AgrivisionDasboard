@@ -1,0 +1,17 @@
+streamlit
+streamlit-authenticator
+pandas
+numpy
+mysql-connector-python
+sqlalchemy
+python-dotenv
+pillow
+openpyxl
+pyyaml
+altair
+matplotlib
+paramiko
+supabase
+python-tsp
+pydantic
+pyautogui
