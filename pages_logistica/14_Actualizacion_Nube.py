@@ -30,7 +30,7 @@ from sqlalchemy import create_engine
 
 # Carga las variables del archivo .env usando ruta absoluta relativa a este
 # script, para que funcione sin importar el directorio de trabajo del servicio.
-load_dotenv(Path(__file__).parent.parent / ".env")
+load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 
 # ---------------------------------------------------------------------------
 # CONFIGURACIÓN DE LOGS
