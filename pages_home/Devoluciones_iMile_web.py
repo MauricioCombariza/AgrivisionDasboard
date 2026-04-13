@@ -66,8 +66,8 @@ def _conectar_imile():
     """
     try:
         return mysql.connector.connect(
-            host=os.environ.get("DB_HOST", "204.168.150.196"),
-            port=int(os.environ.get("DB_PORT", "3306")),
+            host=os.environ.get("DB_HOST_IMILE", "127.0.0.1"),
+            port=int(os.environ.get("DB_PORT_IMILE", "3306")),
             user=os.environ.get("DB_USER", "root"),
             password=os.environ.get("DB_PASSWORD", ""),
             database="imile",
