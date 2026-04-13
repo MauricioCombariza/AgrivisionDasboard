@@ -6,6 +6,11 @@
       "sourceType": "github",
       "computedHash": "063a0e6448123cd359ad0044cc46b0e490cc7964d45ef4bb9fd842bd2ffbca67"
     },
+    "gmail-skill": {
+      "source": "idanbeck/claude-skills",
+      "sourceType": "github",
+      "computedHash": "b7a8aeebb1119e5613d8f922d582c9ef67019b6420e2d57e8736c374b30f7a88"
+    },
     "selenium-automation": {
       "source": "mindrally/skills",
       "sourceType": "github",

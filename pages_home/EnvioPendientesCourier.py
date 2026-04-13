@@ -175,6 +175,27 @@ df_resumen["Estado email"] = df_resumen["Email"].apply(
 )
 st.dataframe(df_resumen, use_container_width=True)
 
+# ── Desglose por mes ──────────────────────────────────────────────────────────
+st.markdown("### 📅 Desglose por mes")
+for cod, df_p in pendientes.items():
+    fila   = couriers_df[couriers_df["codigo"] == cod]
+    nombre = fila["nombre_completo"].iloc[0] if not fila.empty else str(int(cod))
+
+    df_mes = df_p.copy()
+    df_mes["f_emi"] = pd.to_datetime(df_mes["f_emi"], errors="coerce", dayfirst=True)
+    df_mes["Mes"]   = df_mes["f_emi"].dt.to_period("M").astype(str)
+
+    desglose = (
+        df_mes.groupby("Mes")
+        .size()
+        .reset_index(name="Pendientes")
+        .sort_values("Mes")
+    )
+    desglose["Mes"] = pd.to_datetime(desglose["Mes"]).dt.strftime("%B %Y").str.capitalize()
+
+    with st.expander(f"**{nombre}** — {len(df_p)} pendientes totales"):
+        st.dataframe(desglose, use_container_width=True, hide_index=True)
+
 st.divider()
 
 # ── Descargas ─────────────────────────────────────────────────────────────────
