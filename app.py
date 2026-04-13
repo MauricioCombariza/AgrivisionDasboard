@@ -1,12 +1,18 @@
 import streamlit as st
 import yaml
 import os
+from pathlib import Path
 from yaml.loader import SafeLoader
 import streamlit_authenticator as stauth
+from PIL import Image
+
+# Ruta absoluta al logo para que funcione sin importar el directorio de trabajo
+_ASSETS = Path(__file__).parent / "assets"
+_favicon = Image.open(_ASSETS / "favicon.ico")
 
 st.set_page_config(
-    page_title="Carvajal - Sistema Unificado",
-    page_icon="📦",
+    page_title="Agrivision - Sistema Unificado",
+    page_icon=_favicon,
     layout="wide"
 )
 
@@ -41,6 +47,9 @@ role = _config["credentials"]["usernames"][username].get("role", "paquetes")
 st.session_state["role"] = role
 st.session_state["user_name"] = name
 
+_logo = Image.open(_ASSETS / "logo_sin_fondo_360px.png")
+st.sidebar.image(_logo, use_container_width=True)
+st.sidebar.divider()
 authenticator.logout("Cerrar sesión", location="sidebar")
 st.sidebar.write(f"👤 {name} ({role})")
 
