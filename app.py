@@ -65,6 +65,7 @@ PAGES_LOGISTICA = [
     st.Page("pages_logistica/11_Nomina.py", title="Nómina", icon="💼"),
     st.Page("pages_logistica/12_Detalle_Gestiones.py", title="Detalle Gestiones", icon="📋"),
     st.Page("pages_logistica/13_Planillas_Mensajeros_Check.py", title="Planillas Mensajeros", icon="📑"),
+    st.Page("pages_logistica/14_Actualizacion_Nube.py", title="Actualización Nube", icon="☁️"),
 ]
 
 PAGES_PAQUETES = [
@@ -87,6 +88,7 @@ PAGES_PAQUETES = [
     st.Page("pages_home/Planillas.py", title="Planillas"),
     st.Page("pages_home/Procesador_Ordenes.py", title="Procesador Órdenes", icon="🔄"),
     st.Page("pages_home/Reclamos.py", title="Reclamos"),
+    st.Page("pages_home/Ruteo.py", title="Ruteo", icon="🗺️"),
     st.Page("pages_home/Sectores.py", title="Sectores"),
     st.Page("pages_home/Subir_devoluciones.py", title="Subir Devoluciones"),
     st.Page("pages_home/Ventas.py", title="Ventas"),
