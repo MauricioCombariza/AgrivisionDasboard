@@ -183,7 +183,8 @@ for cod, df_p in pendientes.items():
 
     df_mes = df_p.copy()
     df_mes["f_emi"] = pd.to_datetime(df_mes["f_emi"], errors="coerce", format="%Y-%m-%d")
-    df_mes["Mes"]   = df_mes["f_emi"].dt.to_period("M").astype(str)
+    # Mantener Period para ordenar correctamente y convertir a timestamp solo al final
+    df_mes["Mes"] = df_mes["f_emi"].dt.to_period("M")
 
     desglose = (
         df_mes.groupby("Mes")
@@ -191,7 +192,8 @@ for cod, df_p in pendientes.items():
         .reset_index(name="Pendientes")
         .sort_values("Mes")
     )
-    desglose["Mes"] = pd.to_datetime(desglose["Mes"]).dt.strftime("%B %Y").str.capitalize()
+    # .dt.to_timestamp() da el primer día del mes, evita ambigüedad de pd.to_datetime en strings de periodo
+    desglose["Mes"] = desglose["Mes"].dt.to_timestamp().dt.strftime("%B %Y").str.capitalize()
 
     with st.expander(f"**{nombre}** — {len(df_p)} pendientes totales"):
         st.dataframe(desglose, use_container_width=True, hide_index=True)
