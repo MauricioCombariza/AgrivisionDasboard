@@ -28,10 +28,9 @@ import streamlit as st
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 
-# Carga las variables del archivo .env (host, usuario, contraseña de cada BD).
-# load_dotenv() no sobreescribe variables ya definidas en el entorno del SO,
-# lo que permite override en producción sin cambiar el archivo .env.
-load_dotenv()
+# Carga las variables del archivo .env usando ruta absoluta relativa a este
+# script, para que funcione sin importar el directorio de trabajo del servicio.
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 # ---------------------------------------------------------------------------
 # CONFIGURACIÓN DE LOGS
