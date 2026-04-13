@@ -182,7 +182,7 @@ for cod, df_p in pendientes.items():
     nombre = fila["nombre_completo"].iloc[0] if not fila.empty else str(int(cod))
 
     df_mes = df_p.copy()
-    df_mes["f_emi"] = pd.to_datetime(df_mes["f_emi"], errors="coerce", dayfirst=True)
+    df_mes["f_emi"] = pd.to_datetime(df_mes["f_emi"], errors="coerce", format="%Y-%m-%d")
     df_mes["Mes"]   = df_mes["f_emi"].dt.to_period("M").astype(str)
 
     desglose = (
