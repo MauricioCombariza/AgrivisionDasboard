@@ -32,6 +32,10 @@ const client = new Client({
     }),
     puppeteer: {
         headless: true,
+        // Usar Chromium del sistema si existe (evita problemas de librerías en Linux).
+        // Si la variable de entorno CHROME_PATH está definida, se usa esa ruta;
+        // de lo contrario Puppeteer busca su propio Chrome descargado.
+        executablePath: process.env.CHROME_PATH || undefined,
         // Flags necesarios para correr Chromium como root en Linux sin sandbox.
         args: [
             "--no-sandbox",
