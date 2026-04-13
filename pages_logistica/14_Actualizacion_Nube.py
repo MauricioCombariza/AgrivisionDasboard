@@ -173,7 +173,7 @@ with st.expander(
 ):
     st.info(
         f"Descarga los últimos **{HISTO_LIMIT:,}** registros de la tabla `histo` "
-        f"(base `{_DB_HISTO}`) y los guarda como `histo.csv` en la carpeta de trabajo."
+        f"(base `{_BW_NAME}`) y los guarda como `histo.csv` en la carpeta de trabajo."
     )
 
     if st.button("⬇️ Descargar histo.csv", type="primary", key="btn_p1"):
