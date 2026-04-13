@@ -84,6 +84,7 @@ PAGES_PAQUETES = [
     st.Page("pages_home/BuscarPaquete.py", title="Buscar Paquete", icon="🔍"),
     st.Page("pages_home/ExcelACSV.py", title="Excel a CSV", icon="📄"),
     st.Page("pages_home/Devoluciones_iMile.py", title="Devoluciones iMile", icon="🔄"),
+    st.Page("pages_home/Devoluciones_iMile_web.py", title="Devoluciones iMile Web", icon="📱"),
     st.Page("pages_home/EstandarizarDirecciones.py", title="Estandarizar Direcciones", icon="📍"),
     st.Page("pages_home/captura_imile.py", title="Captura iMile"),
     st.Page("pages_home/Cumplimiento_imile.py", title="Cumplimiento iMile"),
