@@ -18,7 +18,7 @@ def _conectar_local():
         return mysql.connector.connect(
             host="localhost",
             user="root",
-            password="",
+            password=os.environ.get("DB_PASSWORD_LOCAL", ""),
             database="logistica",
         )
     except Exception as e:

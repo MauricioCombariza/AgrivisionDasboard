@@ -21,7 +21,7 @@ def conectar_db():
         conn = mysql.connector.connect(
             host="localhost",
             user=os.environ.get("DB_USER", "root"),
-            password="",
+            password=os.environ.get("DB_PASSWORD_LOCAL", ""),
             database="logistica",
             autocommit=False,
             connect_timeout=10
