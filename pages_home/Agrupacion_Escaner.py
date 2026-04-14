@@ -37,13 +37,20 @@ def nueva_conexion():
         return None
 
 # Ruta del archivo CSV
-ruta_archivo = '/mnt/c/Users/mcomb/Desktop/Carvajal/python/basesHisto.csv'
+ruta_archivo = '/mnt/c/Users/mcomb/Desktop/Carvajal/python/dashboard.csv'
 
 # Cargar datos
 @st.cache_data(ttl=300)  # Recarga CSV cada 5 minutos para detectar cambios
 def cargar_datos():
     if os.path.exists(ruta_archivo):
-        df = pd.read_csv(ruta_archivo, low_memory=False)
+        df = pd.read_csv(ruta_archivo, low_memory=False, encoding='latin1')
+        # Mapear columnas de dashboard.csv a las esperadas por el procesador
+        if 'lot_esc' not in df.columns and 'planilla' in df.columns:
+            df['lot_esc'] = df['planilla']
+        if 'f_esc' not in df.columns and 'f_lleva' in df.columns:
+            df['f_esc'] = df['f_lleva'].astype(str).str.replace('-', '.', regex=False)
+        if 'mot_esc' not in df.columns and 'motivo' in df.columns:
+            df['mot_esc'] = df['motivo']
         return df
     else:
         return None
