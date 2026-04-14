@@ -24,6 +24,8 @@ if 'facturacion_schema_ok' not in st.session_state:
         "ALTER TABLE facturas_recibidas MODIFY COLUMN tipo VARCHAR(50) NOT NULL DEFAULT 'otros'",
         "ALTER TABLE gastos_administrativos ADD COLUMN empresa VARCHAR(200) NULL",
         "ALTER TABLE gastos_administrativos ADD COLUMN numero_factura_ext VARCHAR(100) NULL",
+        "ALTER TABLE personal ADD COLUMN precio_local DECIMAL(10,0) NULL DEFAULT NULL",
+        "ALTER TABLE personal ADD COLUMN precio_nacional DECIMAL(10,0) NULL DEFAULT NULL",
     ]:
         try:
             _c = conn.cursor()
@@ -1053,7 +1055,8 @@ with tab6:
         try:
             cursor_t6 = conn.cursor(dictionary=True)
             cursor_t6.execute("""
-                SELECT id, codigo, nombre_completo, tipo_personal
+                SELECT id, codigo, nombre_completo, tipo_personal,
+                       precio_local, precio_nacional
                 FROM personal
                 WHERE activo = TRUE
                 ORDER BY nombre_completo
@@ -1085,11 +1088,9 @@ with tab6:
             st.caption("Vista de resumen — selecciona un trabajador individual para crear liquidaciones")
 
             hoy_t = date.today()
-            mes_ini_t = hoy_t.month - 2 if hoy_t.month > 2 else hoy_t.month + 10
-            anio_ini_t = hoy_t.year if hoy_t.month > 2 else hoy_t.year - 1
             col_td1, col_td2 = st.columns([1.5, 1.5])
             with col_td1:
-                fecha_desde_todos = st.date_input("Desde", value=date(anio_ini_t, mes_ini_t, 1), key="todos_desde")
+                fecha_desde_todos = st.date_input("Desde", value=date(hoy_t.year - 1, hoy_t.month, 1), key="todos_desde")
             with col_td2:
                 fecha_hasta_todos = st.date_input("Hasta", value=hoy_t, key="todos_hasta")
 
@@ -1193,20 +1194,55 @@ with tab6:
             worker_t6 = personal_options_t6[worker_sel]
             worker_codigo = worker_t6['codigo']
             worker_id = worker_t6['id']
+            es_courier_externo = (worker_t6.get('tipo_personal') == 'courier_externo')
+            precio_local_stored  = float(worker_t6.get('precio_local')  or 0)
+            precio_nacional_stored = float(worker_t6.get('precio_nacional') or 0)
 
             st.divider()
 
             if tipo_liq == "🚴 Planillas Mensajero":
                 try:
-                    # Filtros de fecha y estado
+                    # ── Tarifas (solo courier externo) ────────────────────────
+                    if es_courier_externo:
+                        st.caption("💼 Courier Externo — precios por ciudad")
+                        col_tl, col_tn, col_tsave = st.columns([2, 2, 1.5])
+                        with col_tl:
+                            precio_local_inp = st.number_input(
+                                "Precio Local ($/serial)", min_value=0.0,
+                                value=precio_local_stored, step=500.0, format="%.0f",
+                                key=f"precio_local_{worker_codigo}"
+                            )
+                        with col_tn:
+                            precio_nacional_inp = st.number_input(
+                                "Precio Nacional ($/serial)", min_value=0.0,
+                                value=precio_nacional_stored, step=500.0, format="%.0f",
+                                key=f"precio_nacional_{worker_codigo}"
+                            )
+                        with col_tsave:
+                            st.write("")
+                            if st.button("💾 Guardar tarifas", key=f"save_tarifas_{worker_codigo}"):
+                                try:
+                                    cw_t = conn.cursor()
+                                    cw_t.execute(
+                                        "UPDATE personal SET precio_local=%s, precio_nacional=%s WHERE id=%s",
+                                        (precio_local_inp, precio_nacional_inp, worker_id)
+                                    )
+                                    conn.commit()
+                                    cw_t.close()
+                                    st.success("Tarifas guardadas")
+                                    st.rerun()
+                                except Exception as e:
+                                    conn.rollback()
+                                    st.error(f"Error: {e}")
+                        st.divider()
+
+                    # ── Filtros de fecha y estado ─────────────────────────────
                     col_f1, col_f2, col_f3 = st.columns([1.5, 1.5, 2])
                     with col_f1:
                         hoy = date.today()
-                        # Por defecto: primer día de hace 2 meses
-                        mes_ini = hoy.month - 2 if hoy.month > 2 else hoy.month + 10
-                        anio_ini = hoy.year if hoy.month > 2 else hoy.year - 1
+                        # Por defecto: primer día del mismo mes del año anterior
                         fecha_desde_mens = st.date_input(
-                            "Desde", value=date(anio_ini, mes_ini, 1), key="mens_desde"
+                            "Desde", value=date(hoy.year - 1, hoy.month, 1), key="mens_desde"
                         )
                     with col_f2:
                         fecha_hasta_mens = st.date_input(
@@ -1287,14 +1323,23 @@ with tab6:
                                     st.session_state[f"liq_pl_{p['lot_esc']}"] = False
                                 st.rerun()
 
-                        col_h0, col_h1, col_h2, col_h3, col_h4, col_h5, col_h6 = st.columns([0.5, 2, 1.5, 2, 1, 1.5, 1.5])
-                        with col_h0: st.markdown("**✓**")
-                        with col_h1: st.markdown("**Planilla**")
-                        with col_h2: st.markdown("**Fecha**")
-                        with col_h3: st.markdown("**Cliente**")
-                        with col_h4: st.markdown("**Seriales**")
-                        with col_h5: st.markdown("**Val. Unit.**")
-                        with col_h6: st.markdown("**Total**")
+                        # Encabezados de tabla — courier externo no muestra Val. Unit. / Total
+                        if es_courier_externo:
+                            col_h0, col_h1, col_h2, col_h3, col_h4 = st.columns([0.5, 2.5, 1.5, 2, 1])
+                            with col_h0: st.markdown("**✓**")
+                            with col_h1: st.markdown("**Planilla**")
+                            with col_h2: st.markdown("**Fecha**")
+                            with col_h3: st.markdown("**Cliente**")
+                            with col_h4: st.markdown("**Seriales**")
+                        else:
+                            col_h0, col_h1, col_h2, col_h3, col_h4, col_h5, col_h6 = st.columns([0.5, 2, 1.5, 2, 1, 1.5, 1.5])
+                            with col_h0: st.markdown("**✓**")
+                            with col_h1: st.markdown("**Planilla**")
+                            with col_h2: st.markdown("**Fecha**")
+                            with col_h3: st.markdown("**Cliente**")
+                            with col_h4: st.markdown("**Seriales**")
+                            with col_h5: st.markdown("**Val. Unit.**")
+                            with col_h6: st.markdown("**Total**")
 
                         total_sel_mens = 0.0
                         planillas_sel = []
@@ -1302,57 +1347,217 @@ with tab6:
                         for pl in planillas:
                             ya_liquidada = pl.get('facturado_liq') is not None
                             chk = False
-                            c0, c1, c2, c3, c4, c5, c6 = st.columns([0.5, 2, 1.5, 2, 1, 1.5, 1.5])
-                            with c0:
-                                if ya_liquidada:
-                                    if st.button("↩", key=f"unliq_pl_{pl['lot_esc']}", help="Desliquidar planilla"):
-                                        try:
-                                            cw_ul = conn.cursor()
-                                            cw_ul.execute(
-                                                "UPDATE gestiones_mensajero SET facturado_liq = NULL "
-                                                "WHERE lot_esc = %s AND CAST(cod_mensajero AS UNSIGNED) = CAST(%s AS UNSIGNED)",
-                                                (pl['lot_esc'], worker_codigo)
-                                            )
-                                            conn.commit()
-                                            cw_ul.close()
-                                            st.rerun()
-                                        except Exception as e:
-                                            conn.rollback()
-                                            st.error(f"Error: {e}")
-                                else:
-                                    chk = st.checkbox(
-                                        "s", key=f"liq_pl_{pl['lot_esc']}",
-                                        label_visibility="collapsed"
-                                    )
-                            with c1:
-                                lbl = f"~~{pl['lot_esc']}~~ 💳" if ya_liquidada else pl['lot_esc']
-                                st.write(lbl)
-                            with c2:
-                                _fe = str(pl['fecha_escaner'] or '')
-                                try:
-                                    _fe_disp = pd.to_datetime(_fe.replace('.', '-')).strftime('%d/%m/%Y')
-                                except Exception:
-                                    _fe_disp = _fe or '-'
-                                st.write(_fe_disp)
-                            with c3:
-                                st.write(pl['cliente'] or '-')
-                            with c4:
-                                st.write(f"{int(pl['total_seriales'] or 0):,}")
-                            with c5:
-                                st.write(f"${float(pl['valor_unitario'] or 0):,.0f}")
-                            with c6:
-                                st.write(f"${float(pl['valor_total'] or 0):,.0f}")
+                            _fe = str(pl['fecha_escaner'] or '')
+                            try:
+                                _fe_disp = pd.to_datetime(_fe.replace('.', '-')).strftime('%d/%m/%Y')
+                            except Exception:
+                                _fe_disp = _fe or '-'
+
+                            if es_courier_externo:
+                                c0, c1, c2, c3, c4 = st.columns([0.5, 2.5, 1.5, 2, 1])
+                                with c0:
+                                    # Planillas cerradas no se pueden reabrir en courier externo
+                                    if ya_liquidada:
+                                        st.write("🔒")
+                                    else:
+                                        chk = st.checkbox(
+                                            "s", key=f"liq_pl_{pl['lot_esc']}",
+                                            label_visibility="collapsed"
+                                        )
+                                with c1:
+                                    lbl = f"~~{pl['lot_esc']}~~ 💳" if ya_liquidada else pl['lot_esc']
+                                    st.write(lbl)
+                                with c2: st.write(_fe_disp)
+                                with c3: st.write(pl['cliente'] or '-')
+                                with c4: st.write(f"{int(pl['total_seriales'] or 0):,}")
+                            else:
+                                c0, c1, c2, c3, c4, c5, c6 = st.columns([0.5, 2, 1.5, 2, 1, 1.5, 1.5])
+                                with c0:
+                                    if ya_liquidada:
+                                        if st.button("↩", key=f"unliq_pl_{pl['lot_esc']}", help="Desliquidar planilla"):
+                                            try:
+                                                cw_ul = conn.cursor()
+                                                cw_ul.execute(
+                                                    "UPDATE gestiones_mensajero SET facturado_liq = NULL "
+                                                    "WHERE lot_esc = %s AND CAST(cod_mensajero AS UNSIGNED) = CAST(%s AS UNSIGNED)",
+                                                    (pl['lot_esc'], worker_codigo)
+                                                )
+                                                conn.commit()
+                                                cw_ul.close()
+                                                st.rerun()
+                                            except Exception as e:
+                                                conn.rollback()
+                                                st.error(f"Error: {e}")
+                                    else:
+                                        chk = st.checkbox(
+                                            "s", key=f"liq_pl_{pl['lot_esc']}",
+                                            label_visibility="collapsed"
+                                        )
+                                with c1:
+                                    lbl = f"~~{pl['lot_esc']}~~ 💳" if ya_liquidada else pl['lot_esc']
+                                    st.write(lbl)
+                                with c2: st.write(_fe_disp)
+                                with c3: st.write(pl['cliente'] or '-')
+                                with c4: st.write(f"{int(pl['total_seriales'] or 0):,}")
+                                with c5: st.write(f"${float(pl['valor_unitario'] or 0):,.0f}")
+                                with c6: st.write(f"${float(pl['valor_total'] or 0):,.0f}")
+
                             if chk:
                                 planillas_sel.append(pl['lot_esc'])
-                                total_sel_mens += float(pl['valor_total'] or 0)
+                                total_sel_mens += float(pl['total_seriales'] or 0) if es_courier_externo else float(pl['valor_total'] or 0)
 
+                        # ── Sección de liquidación ────────────────────────────
                         if planillas_sel:
                             st.divider()
-                            st.success(f"✅ {len(planillas_sel)} planillas | Total: ${total_sel_mens:,.0f}")
 
                             if not solo_pendientes:
                                 st.info("Cambia a **🟢 Pendientes** para crear la liquidación.")
-                            if solo_pendientes:
+                            elif es_courier_externo:
+                                # ── Desglose por ciudad para courier externo ──
+                                st.markdown("#### Desglose por ciudad")
+
+                                # Obtener todos los ordenes de las planillas seleccionadas
+                                _ph = ','.join(['%s'] * len(planillas_sel))
+                                cursor_t6.execute(f"""
+                                    SELECT orden, SUM(total_seriales) as seriales
+                                    FROM gestiones_mensajero
+                                    WHERE lot_esc IN ({_ph})
+                                      AND CAST(cod_mensajero AS UNSIGNED) = CAST(%s AS UNSIGNED)
+                                    GROUP BY orden
+                                """, planillas_sel + [worker_codigo])
+                                ordenes_rows = cursor_t6.fetchall()
+
+                                # Cruzar con CSV para obtener ciudad1 por orden
+                                _CSV_PATH = "/mnt/c/Users/mcomb/Desktop/Carvajal/python/dashboard.csv"
+                                ciudad_map = pd.Series(dtype=str)
+                                if os.path.exists(_CSV_PATH):
+                                    try:
+                                        _df_csv = pd.read_csv(
+                                            _CSV_PATH, usecols=['orden', 'ciudad1'],
+                                            low_memory=False, encoding='latin1'
+                                        )
+                                        _df_csv['orden'] = pd.to_numeric(_df_csv['orden'], errors='coerce')
+                                        ciudad_map = (
+                                            _df_csv.dropna(subset=['orden'])
+                                            .drop_duplicates('orden')
+                                            .set_index('orden')['ciudad1']
+                                        )
+                                    except Exception:
+                                        pass
+
+                                # Construir tabla ciudad → seriales
+                                df_ord = pd.DataFrame(ordenes_rows)
+                                df_ord['orden'] = pd.to_numeric(df_ord['orden'], errors='coerce')
+                                df_ord['Ciudad'] = df_ord['orden'].map(ciudad_map).fillna('Sin ciudad')
+                                df_ord['seriales'] = df_ord['seriales'].fillna(0).astype(int)
+                                df_ciud = (
+                                    df_ord.groupby('Ciudad')['seriales'].sum()
+                                    .reset_index().rename(columns={'seriales': 'Seriales'})
+                                    .sort_values('Seriales', ascending=False)
+                                    .reset_index(drop=True)
+                                )
+                                df_ciud['Tipo'] = 'local'
+
+                                # Editor: el usuario clasifica cada ciudad como local o nacional
+                                _editor_key = f"ciud_editor_{'_'.join(str(p) for p in sorted(planillas_sel))}"
+                                edited_ciud = st.data_editor(
+                                    df_ciud,
+                                    use_container_width=True,
+                                    hide_index=True,
+                                    column_config={
+                                        'Ciudad':   st.column_config.TextColumn('Ciudad', disabled=True),
+                                        'Seriales': st.column_config.NumberColumn('Seriales', disabled=True),
+                                        'Tipo':     st.column_config.SelectboxColumn(
+                                            'Tipo', options=['local', 'nacional'], required=True
+                                        ),
+                                    },
+                                    key=_editor_key
+                                )
+
+                                # Calcular precios y total según clasificación
+                                precio_local_inp  = st.session_state.get(f"precio_local_{worker_codigo}",  precio_local_stored)
+                                precio_nacional_inp = st.session_state.get(f"precio_nacional_{worker_codigo}", precio_nacional_stored)
+                                edited_ciud['Precio/Serial'] = edited_ciud['Tipo'].map(
+                                    {'local': precio_local_inp, 'nacional': precio_nacional_inp}
+                                ).fillna(0)
+                                edited_ciud['Subtotal'] = (
+                                    edited_ciud['Seriales'] * edited_ciud['Precio/Serial']
+                                ).round(0).astype(int)
+
+                                # Mostrar resumen calculado
+                                st.dataframe(
+                                    edited_ciud[['Ciudad', 'Seriales', 'Tipo', 'Precio/Serial', 'Subtotal']],
+                                    use_container_width=True, hide_index=True
+                                )
+                                total_courier = float(edited_ciud['Subtotal'].sum())
+                                total_ser_courier = int(edited_ciud['Seriales'].sum())
+                                st.success(
+                                    f"**Total calculado: ${total_courier:,.0f}** "
+                                    f"({total_ser_courier:,} seriales · "
+                                    f"local ${precio_local_inp:,.0f} / nacional ${precio_nacional_inp:,.0f})"
+                                )
+
+                                st.divider()
+                                col_m1, col_f1 = st.columns(2)
+                                with col_m1:
+                                    _mk_ce = f"monto_courier_{len(planillas_sel)}_{int(total_courier)}"
+                                    monto_courier = st.number_input(
+                                        "Monto Acordado *", min_value=0.0,
+                                        value=total_courier, step=1000.0, format="%.0f",
+                                        key=_mk_ce
+                                    )
+                                with col_f1:
+                                    fecha_liq_courier = st.date_input(
+                                        "Fecha Liquidación", value=date.today(), key="liq_fecha_courier"
+                                    )
+                                obs_courier = st.text_input("Observaciones (opcional)", key="liq_obs_courier")
+
+                                if st.button("💾 Crear Liquidación y Cerrar Planillas", type="primary", key="btn_liq_courier"):
+                                    try:
+                                        cw = conn.cursor(dictionary=True)
+                                        fecha_str = fecha_liq_courier.strftime('%Y%m%d')
+                                        prefix_liq = f"LIQ-{worker_codigo}-{fecha_str}"
+                                        cw.execute(
+                                            "SELECT COUNT(*) as cnt FROM facturas_recibidas WHERE numero_factura LIKE %s",
+                                            (f"{prefix_liq}%",)
+                                        )
+                                        seq = cw.fetchone()['cnt']
+                                        num_liq = f"{prefix_liq}-{seq + 1}"
+
+                                        _resumen_ciud = '; '.join(
+                                            f"{r['Ciudad']} {int(r['Seriales'])}×${float(r['Precio/Serial']):.0f}"
+                                            for _, r in edited_ciud.iterrows()
+                                        )
+                                        obs_final = obs_courier or (
+                                            f"Planillas: {', '.join(str(p) for p in planillas_sel)} | {_resumen_ciud}"
+                                        )
+
+                                        cw.execute("""
+                                            INSERT INTO facturas_recibidas
+                                            (numero_factura, personal_id, tipo, fecha_recepcion, fecha_vencimiento,
+                                             subtotal, total, saldo_pendiente, estado, observaciones)
+                                            VALUES (%s, %s, 'mensajero', %s, %s, %s, %s, %s, 'pendiente', %s)
+                                        """, (num_liq, worker_id, fecha_liq_courier, fecha_liq_courier,
+                                              monto_courier, monto_courier, monto_courier, obs_final))
+
+                                        factura_id_nuevo = cw.lastrowid
+                                        for lot in planillas_sel:
+                                            cw.execute(
+                                                "UPDATE gestiones_mensajero SET facturado_liq = %s "
+                                                "WHERE lot_esc = %s AND CAST(cod_mensajero AS UNSIGNED) = CAST(%s AS UNSIGNED)",
+                                                (factura_id_nuevo, lot, worker_codigo)
+                                            )
+                                        conn.commit()
+                                        cw.close()
+                                        st.success(f"✅ Liquidación **{num_liq}** creada por ${monto_courier:,.0f} — planillas cerradas")
+                                        st.rerun()
+                                    except Exception as e:
+                                        conn.rollback()
+                                        st.error(f"Error: {e}")
+
+                            else:
+                                # ── Liquidación estándar para mensajeros internos ──
+                                st.success(f"✅ {len(planillas_sel)} planillas | Total: ${total_sel_mens:,.0f}")
                                 col_m1, col_f1 = st.columns(2)
                                 with col_m1:
                                     _mk_mens = f"liq_monto_mens_{len(planillas_sel)}_{int(total_sel_mens)}"
