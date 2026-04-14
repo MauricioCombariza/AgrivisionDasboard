@@ -29,6 +29,7 @@ const VPS_KEY     = expanduser("~/.ssh/agrivision_vps")
 const VPS_DB_USER = "root"
 const VPS_DB_PASS = "Root2024!"
 const LOCAL_USER  = "root"
+const LOCAL_PASS  = "Vale2010"
 
 # Note 4: TABLAS_SYNC es un Array de Tuplas. Cada tupla tiene 3 elementos:
 # (nombre_bd, nombre_tabla, columna_de_proteccion).
@@ -39,11 +40,11 @@ const TABLAS_SYNC = [
     ("imile",     "paquetes",            nothing),
     ("logistica", "gestiones_mensajero", "editado_manualmente"),
     ("logistica", "ordenes",             nothing),
+    ("logistica", "personal",            nothing),
 ]
 
-const TABLAS_BAJAR = [
-    ("logistica", "personal"),
-]
+# personal se sube (no se baja) para preservar columnas precio_local/precio_nacional
+const TABLAS_BAJAR = Vector{Tuple{String,String}}()
 
 # Note 5: SSH_ARGS es un Vector de Strings que representa los argumentos comunes
 # para todos los comandos SSH. Factorizarlos aqui evita repeticion y hace que
@@ -134,7 +135,7 @@ function sincronizar_tabla(db::String, tabla::String, protect_col::Union{String,
         # no sustitucion de comandos bash. Esto es seguro contra inyeccion de comandos
         # porque cada token se pasa como argumento separado al SO (no pasa por /bin/sh).
         run(pipeline(
-            `mysqldump -u$LOCAL_USER --single-transaction --no-tablespaces
+            `mysqldump -u$LOCAL_USER -p$LOCAL_PASS --single-transaction --no-tablespaces
              --no-create-info --replace --skip-add-locks $db $tabla`;
             stdout=sql_local, stderr=devnull,
         ))
@@ -266,7 +267,7 @@ function descargar_tabla(db::String, tabla::String)::Bool
         # `stderr=devnull` suprime los warnings de MySQL (ej. "Using password on command line").
         print("  |  [3/3] mysql import local... ")
         run(pipeline(
-            `mysql -u$LOCAL_USER $db`;
+            `mysql -u$LOCAL_USER -p$LOCAL_PASS $db`;
             stdin=sql_local, stderr=devnull,
         ))
         run(ssh_cmd("rm -f $remote_path"))
