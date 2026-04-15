@@ -5,21 +5,34 @@ import sys
 from pathlib import Path
 import urllib.parse
 
+import mysql.connector
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).parent.parent / ".env", override=True)
-
-_ROOT = str(Path(__file__).parent.parent)
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
-
-from utils.db_connection import conectar_bd
+# Ruta explícita al .env para garantizar que las credenciales estén disponibles
+_ENV_PATH = Path(__file__).parent.parent / ".env"
+load_dotenv(_ENV_PATH, override=True)
 
 st.title("Sistema de Notificación de Paquetes")
 
 
+def _conectar_imile():
+    """Conexión fresca a la BD imile usando credenciales del .env."""
+    try:
+        conn = mysql.connector.connect(
+            host=os.environ.get("DB_HOST_IMILE", "localhost"),
+            user=os.environ.get("DB_USER_IMILE", "root"),
+            password=os.environ.get("DB_PASSWORD_IMILE", ""),
+            database=os.environ.get("DB_NAME_IMILE", "imile"),
+            connect_timeout=10,
+        )
+        return conn
+    except Exception as e:
+        st.error(f"Error de conexión a MySQL imile: {e}")
+        return None
+
+
 def buscar_paquete(serial: str):
-    conn = conectar_bd()
+    conn = _conectar_imile()
     if not conn:
         return None
     try:
@@ -34,12 +47,12 @@ def buscar_paquete(serial: str):
 
 
 def marcar_whatsapp_enviado(serial: str):
-    conn = conectar_bd()
+    conn = _conectar_imile()
     if not conn:
         return
     try:
         cur = conn.cursor()
-        cur.execute("UPDATE paquetes SET whatsapp = 1 WHERE serial = %s", (serial,))
+        cur.execute("UPDATE paquetes SET whatsapp = 1 WHERE TRIM(serial) = %s", (serial.strip(),))
         conn.commit()
     except Exception as e:
         st.error(f"Error al actualizar el estado: {e}")
@@ -47,7 +60,7 @@ def marcar_whatsapp_enviado(serial: str):
         conn.close()
 
 
-# Formulario
+# ── Formulario ────────────────────────────────────────────────────────────────
 with st.form("formulario_codigo_barras"):
     codigo_barras = st.text_input("Ingrese el código de barras:")
     boton_enviar = st.form_submit_button("Fuera de zona")
@@ -64,7 +77,7 @@ if boton_enviar:
         elif paquete.get("whatsapp") == 1:
             st.warning("Ya se envió un WhatsApp para este paquete.")
         else:
-            nombre   = paquete.get("nombre", "Cliente")
+            nombre    = paquete.get("nombre", "Cliente")
             direccion = paquete.get("direccion", "dirección registrada")
             telefono  = paquete.get("telefono", "")
             serial    = paquete.get("serial", serial_buscado)
@@ -97,7 +110,7 @@ if boton_enviar:
                     marcar_whatsapp_enviado(serial)
                     st.success("Estado actualizado: whatsapp = 1")
 
-# Sidebar
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 st.sidebar.header("Instrucciones")
 st.sidebar.write("""
 1. Ingrese el código de barras
