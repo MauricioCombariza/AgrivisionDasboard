@@ -483,14 +483,27 @@ try:
                             conn_bw2 = _conectar_bases_web()
                             errores_upd = []
 
+                            # Valor total de la planilla según clasificación de ciudades.
+                            # Se distribuye entre los registros de gestiones_mensajero proporcional
+                            # al conteo de seriales de cada uno (robusto ante total_seriales incorrectos).
+                            _total_gm_seriales = df_busq['cantidad_seriales'].astype(int).sum()
+
                             for _, gm_row in df_busq.iterrows():
                                 gestion_id = int(gm_row['id'])
                                 orden_gm   = str(gm_row['orden'])
 
+                                # Proporciones globales local/nacional de la planilla (precalculadas en df_ciudad_editado).
+                                # Se usan como fallback cuando la consulta por orden falla o no retorna filas.
+                                _total_histo = total_loc + total_nac
+                                _prop_loc = total_loc / _total_histo if _total_histo > 0 else 0.0
+                                _prop_nac = total_nac / _total_histo if _total_histo > 0 else 1.0
+
                                 if conn_bw2:
                                     try:
                                         cur_bw2 = conn_bw2.cursor(dictionary=True)
-                                        # Misma corrección: usar columna 'planilla' en histo
+                                        # Intenta obtener distribución de ciudades para este registro (por orden).
+                                        # Si histo no tiene columna 'orden' o el valor no existe, la excepción
+                                        # se captura y se usa el fallback proporcional.
                                         cur_bw2.execute("""
                                             SELECT
                                                 COALESCE(NULLIF(TRIM(ciudad1), ''), 'Sin ciudad') AS ciudad,
@@ -502,32 +515,40 @@ try:
                                         ciudad_rows = cur_bw2.fetchall()
                                         cur_bw2.close()
 
-                                        # Calcular valor: cada ciudad aporta según su tipo
-                                        nuevo_valor = 0.0
-                                        for cr in ciudad_rows:
-                                            t = tipo_map.get(cr['ciudad'], 'nacional')
-                                            p = precio_local_edit if t == 'local' else precio_nac_edit
-                                            nuevo_valor += cr['cnt'] * p
-
                                         total_ser = int(gm_row['cantidad_seriales'])
+
+                                        if ciudad_rows:
+                                            # Calcular valor: cada ciudad aporta según su tipo (local/nacional)
+                                            nuevo_valor = 0.0
+                                            for cr in ciudad_rows:
+                                                t = tipo_map.get(cr['ciudad'], 'nacional')
+                                                p = precio_local_edit if t == 'local' else precio_nac_edit
+                                                nuevo_valor += cr['cnt'] * p
+                                        else:
+                                            # Sin filas por orden en histo: distribuir total_val proporcional
+                                            # al peso de este registro dentro de todos los gestiones.
+                                            # Usar la suma de gestiones (no histo) para evitar que total_seriales
+                                            # incorrecto en la BD multiplique el valor de toda la planilla.
+                                            prop_reg = total_ser / _total_gm_seriales if _total_gm_seriales > 0 else 0.0
+                                            nuevo_valor = prop_reg * total_val
+
                                         # precio_unitario = promedio ponderado
                                         precio_unit = nuevo_valor / total_ser if total_ser > 0 else 0.0
 
                                     except Exception as e_ord:
-                                        errores_upd.append(f"Gestion {gestion_id}: {e_ord}")
-                                        nuevo_valor  = float(gm_row['valor_total'])
-                                        precio_unit  = float(gm_row['precio'])
+                                        # La columna 'orden' no existe en histo u otro error de SQL.
+                                        # Distribuir total_val proporcional al peso del registro en gestiones.
+                                        errores_upd.append(f"Gestion {gestion_id} (fallback proporcional): {e_ord}")
+                                        total_ser   = int(gm_row['cantidad_seriales'])
+                                        prop_reg    = total_ser / _total_gm_seriales if _total_gm_seriales > 0 else 0.0
+                                        nuevo_valor = prop_reg * total_val
+                                        precio_unit = nuevo_valor / total_ser if total_ser > 0 else 0.0
                                 else:
-                                    # Sin conexión a histo: usar proporción global local/nacional
-                                    total_histo = total_loc + total_nac
-                                    if total_histo > 0:
-                                        prop_loc = total_loc / total_histo
-                                        prop_nac = total_nac / total_histo
-                                    else:
-                                        prop_loc, prop_nac = 0, 1
-                                    total_ser    = int(gm_row['cantidad_seriales'])
-                                    nuevo_valor  = total_ser * (prop_loc * precio_local_edit + prop_nac * precio_nac_edit)
-                                    precio_unit  = nuevo_valor / total_ser if total_ser > 0 else 0.0
+                                    # Sin conexión a histo: distribuir total_val proporcional al peso del registro
+                                    total_ser   = int(gm_row['cantidad_seriales'])
+                                    prop_reg    = total_ser / _total_gm_seriales if _total_gm_seriales > 0 else 0.0
+                                    nuevo_valor = prop_reg * total_val
+                                    precio_unit = nuevo_valor / total_ser if total_ser > 0 else 0.0
 
                                 cursor_upd.execute("""
                                     UPDATE gestiones_mensajero
