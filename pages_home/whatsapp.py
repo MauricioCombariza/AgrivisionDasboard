@@ -1,13 +1,13 @@
 # whatsapp.py
 import streamlit as st
 import os
+from pathlib import Path
 from supabase import create_client
 from dotenv import load_dotenv
 import urllib.parse
 
-# Cargar variables de entorno desde .env
-load_dotenv()
-
+# Ruta explícita al .env en la raíz del proyecto (igual que el resto de páginas)
+load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 
 st.title("Sistema de Notificación de Paquetes")
 
@@ -18,15 +18,26 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     st.error("Error: No se encontraron las credenciales de Supabase en .env")
     st.stop()
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+try:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as e:
+    st.error(f"Error al crear cliente Supabase: {e}")
+    st.stop()
 
 # Funciones de BD
 def buscar_paquete(serial_number):
-    resp = supabase.table("paquetes").select("*").eq("serial_number", serial_number).execute()
-    return resp.data[0] if resp.data else None
+    try:
+        resp = supabase.table("paquetes").select("*").eq("serial_number", serial_number).execute()
+        return resp.data[0] if resp.data else None
+    except Exception as e:
+        st.error(f"Error al consultar Supabase: {e}")
+        return None
 
 def actualizar_estado_whatsapp(id_paquete):
-    supabase.table("paquetes").update({"whatsapp": 1}).eq("id", id_paquete).execute()
+    try:
+        supabase.table("paquetes").update({"whatsapp": 1}).eq("id", id_paquete).execute()
+    except Exception as e:
+        st.error(f"Error al actualizar Supabase: {e}")
 
 # Formulario
 with st.form("formulario_codigo_barras"):
@@ -37,9 +48,20 @@ if boton_enviar:
     if not codigo_barras:
         st.warning("Por favor, ingrese un código de barras.")
     else:
-        paquete = buscar_paquete(codigo_barras)
+        paquete = buscar_paquete(codigo_barras.strip())
+        if paquete is None:
+            # Intentar con y sin prefijo de ceros para descartar diferencias de formato
+            alt = codigo_barras.strip().lstrip("0")
+            paquete_alt = buscar_paquete(alt) if alt != codigo_barras.strip() else None
+            if paquete_alt:
+                paquete = paquete_alt
+
         if not paquete:
-            st.error(f"No se encontró paquete: {codigo_barras}")
+            st.error(f"No se encontró paquete con serial: **{codigo_barras.strip()}**")
+            st.caption(
+                "Verifica que el serial exista en la tabla `paquetes` de Supabase "
+                "y que la columna se llame `serial_number`."
+            )
         elif paquete.get("whatsapp") == 1:
             st.warning("Ya se envió un WhatsApp para este paquete.")
         else:
@@ -80,9 +102,9 @@ if boton_enviar:
 # Sidebar
 st.sidebar.header("Instrucciones")
 st.sidebar.write("""
-1. Ingrese el código de barras  
-2. Haga clic en 'Fuera de zona'  
-3. Verifique el mensaje y enlace generado  
-4. Haga clic en el enlace para enviar el mensaje por WhatsApp  
-5. Luego pulse 'Marcar como enviado' para actualizar el estado  
+1. Ingrese el código de barras
+2. Haga clic en 'Fuera de zona'
+3. Verifique el mensaje y enlace generado
+4. Haga clic en el enlace para enviar el mensaje por WhatsApp
+5. Luego pulse 'Marcar como enviado' para actualizar el estado
 """)
