@@ -1,43 +1,51 @@
 # whatsapp.py
 import streamlit as st
 import os
+import sys
 from pathlib import Path
-from supabase import create_client
-from dotenv import load_dotenv
 import urllib.parse
 
-# Ruta explícita al .env en la raíz del proyecto (igual que el resto de páginas)
+from dotenv import load_dotenv
+
 load_dotenv(Path(__file__).parent.parent / ".env", override=True)
+
+_ROOT = str(Path(__file__).parent.parent)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from utils.db_connection import conectar_bd
 
 st.title("Sistema de Notificación de Paquetes")
 
-# Configuración de Supabase
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-if not SUPABASE_URL or not SUPABASE_KEY:
-    st.error("Error: No se encontraron las credenciales de Supabase en .env")
-    st.stop()
 
-try:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
-    st.error(f"Error al crear cliente Supabase: {e}")
-    st.stop()
-
-# Funciones de BD
-def buscar_paquete(serial_number):
-    try:
-        resp = supabase.table("paquetes").select("*").eq("serial_number", serial_number).execute()
-        return resp.data[0] if resp.data else None
-    except Exception as e:
-        st.error(f"Error al consultar Supabase: {e}")
+def buscar_paquete(serial: str):
+    conn = conectar_bd()
+    if not conn:
         return None
-
-def actualizar_estado_whatsapp(id_paquete):
     try:
-        supabase.table("paquetes").update({"whatsapp": 1}).eq("id", id_paquete).execute()
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT * FROM paquetes WHERE TRIM(serial) = %s", (serial.strip(),))
+        return cur.fetchone()
     except Exception as e:
-        st.error(f"Error al actualizar Supabase: {e}")
+        st.error(f"Error al consultar la base de datos: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def marcar_whatsapp_enviado(serial: str):
+    conn = conectar_bd()
+    if not conn:
+        return
+    try:
+        cur = conn.cursor()
+        cur.execute("UPDATE paquetes SET whatsapp = 1 WHERE serial = %s", (serial,))
+        conn.commit()
+    except Exception as e:
+        st.error(f"Error al actualizar el estado: {e}")
+    finally:
+        conn.close()
+
 
 # Formulario
 with st.form("formulario_codigo_barras"):
@@ -48,28 +56,19 @@ if boton_enviar:
     if not codigo_barras:
         st.warning("Por favor, ingrese un código de barras.")
     else:
-        paquete = buscar_paquete(codigo_barras.strip())
-        if paquete is None:
-            # Intentar con y sin prefijo de ceros para descartar diferencias de formato
-            alt = codigo_barras.strip().lstrip("0")
-            paquete_alt = buscar_paquete(alt) if alt != codigo_barras.strip() else None
-            if paquete_alt:
-                paquete = paquete_alt
+        serial_buscado = codigo_barras.strip()
+        paquete = buscar_paquete(serial_buscado)
 
         if not paquete:
-            st.error(f"No se encontró paquete con serial: **{codigo_barras.strip()}**")
-            st.caption(
-                "Verifica que el serial exista en la tabla `paquetes` de Supabase "
-                "y que la columna se llame `serial_number`."
-            )
+            st.error(f"No se encontró paquete con serial: **{serial_buscado}**")
         elif paquete.get("whatsapp") == 1:
             st.warning("Ya se envió un WhatsApp para este paquete.")
         else:
-            # Preparar mensaje
-            nombre = paquete.get("nombre", "Cliente")
-            direccion = paquete.get("direccion_origen", "dirección registrada")
-            telefono = paquete.get("telefono", "")
-            serial = paquete.get("serial_number", "serial")
+            nombre   = paquete.get("nombre", "Cliente")
+            direccion = paquete.get("direccion", "dirección registrada")
+            telefono  = paquete.get("telefono", "")
+            serial    = paquete.get("serial", serial_buscado)
+
             if not telefono:
                 st.error("El paquete no tiene número de teléfono registrado.")
             else:
@@ -78,13 +77,12 @@ if boton_enviar:
 
                 mensaje = (
                     f"Hola {nombre}, le saludamos cordialmente. "
-                    f"Notamos que en su envio con serial: '{serial} su dirección registrada es '{direccion}' y queremos informarle "
+                    f"Notamos que en su envio con serial: '{serial}' su dirección registrada es '{direccion}' y queremos informarle "
                     "que somos la empresa encargada de enviar sus paquetes de Temu. "
                     "Hemos detectado que esta dirección no corresponde a la localidad de Barrios Unidos. "
                     "¿Podría por favor confirmarnos la dirección correcta? Gracias."
                 )
 
-                # Mostrar mensaje y enlace
                 st.subheader("Mensaje generado:")
                 st.text(mensaje)
 
@@ -96,7 +94,7 @@ if boton_enviar:
                 st.code(url_whatsapp, language="text")
 
                 if st.button("Marcar como enviado"):
-                    actualizar_estado_whatsapp(paquete["id"])
+                    marcar_whatsapp_enviado(serial)
                     st.success("Estado actualizado: whatsapp = 1")
 
 # Sidebar
