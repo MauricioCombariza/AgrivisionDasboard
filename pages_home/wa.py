@@ -182,7 +182,7 @@ import mysql.connector as _mc
 def buscar_datos_por_serial(serial):
     """Busca el serial en la BD local imile (localhost)."""
     try:
-        conn = _mc.connect(host="localhost", user="root", password="", database="imile")
+        conn = _mc.connect(host="localhost", user="root", password=os.environ.get("DB_PASSWORD_IMILE", ""), database="imile")
         with conn.cursor(dictionary=True) as cur:
             cur.execute(
                 "SELECT serial, nombre, direccion, telefono "
