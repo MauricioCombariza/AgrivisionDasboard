@@ -33,16 +33,19 @@ if 'planilla_buscada' not in st.session_state:
 try:
     cursor = conn.cursor(dictionary=True)
 
-    # Asegurar que existe la columna editado_manualmente
-    try:
-        _cur_init = conn.cursor()
-        _cur_init.execute(
-            "ALTER TABLE gestiones_mensajero ADD COLUMN editado_manualmente TINYINT(1) NOT NULL DEFAULT 0"
-        )
-        conn.commit()
-        _cur_init.close()
-    except Exception:
-        conn.rollback()
+    # Migraciones de esquema: se ejecutan una vez y fallan silenciosamente si ya existen
+    for _migration_sql in [
+        "ALTER TABLE gestiones_mensajero ADD COLUMN editado_manualmente TINYINT(1) NOT NULL DEFAULT 0",
+        "ALTER TABLE personal ADD COLUMN precio_local DECIMAL(10,0) NULL DEFAULT NULL",
+        "ALTER TABLE personal ADD COLUMN precio_nacional DECIMAL(10,0) NULL DEFAULT NULL",
+    ]:
+        try:
+            _cur_init = conn.cursor()
+            _cur_init.execute(_migration_sql)
+            conn.commit()
+            _cur_init.close()
+        except Exception:
+            conn.rollback()
 
     # Crear tabla planillas_revisadas si no existe
     try:
@@ -98,7 +101,10 @@ try:
                     gm.tipo_gestion,
                     gm.orden,
                     gm.editado_manualmente,
-                    p.nombre_completo as nombre_mensajero
+                    p.nombre_completo as nombre_mensajero,
+                    p.tipo_personal,
+                    p.precio_local,
+                    p.precio_nacional
                 FROM gestiones_mensajero gm
                 LEFT JOIN personal p ON gm.cod_mensajero = p.codigo
                 WHERE gm.lot_esc = %s
@@ -156,6 +162,12 @@ try:
                             st.error(f"Error: {e}")
 
             df_busq = pd.DataFrame(registros)
+
+            # Detectar si el mensajero es courier_externo para mostrar vista por ciudad
+            _tipo_personal = df_busq['tipo_personal'].iloc[0] if not df_busq.empty else None
+            es_courier_externo_busq = (_tipo_personal == 'courier_externo')
+            precio_local_busq   = float(df_busq['precio_local'].iloc[0]   or 0) if not df_busq.empty else 0.0
+            precio_nacional_busq = float(df_busq['precio_nacional'].iloc[0] or 0) if not df_busq.empty else 0.0
 
             # Obtener lista de mensajeros para el selector
             cursor.execute("""
@@ -295,66 +307,178 @@ try:
 
             st.divider()
 
-            # =====================================================
-            # AJUSTAR PRECIO DE TODA LA PLANILLA
-            # =====================================================
-            st.markdown("##### Ajustar Precio de toda la Planilla")
+            if es_courier_externo_busq:
+                # =====================================================
+                # COURIER EXTERNO: AJUSTE DE PRECIO POR CIUDAD
+                # Cada fila de la planilla se clasifica como local o
+                # nacional para aplicar la tarifa correspondiente.
+                # =====================================================
+                st.markdown("##### 🏙️ Ajuste de Precio por Ciudad (Courier Externo)")
 
-            precios_actuales = df_busq['precio'].astype(float).unique()
-            precios_str = ", ".join([f"${p:,.0f}" for p in sorted(precios_actuales)])
-            precio_promedio_planilla = float(df_busq['valor_total'].astype(float).sum() / total_seriales_planilla) if total_seriales_planilla > 0 else 0.0
+                # Mostrar tarifas almacenadas del mensajero y permitir ajustarlas
+                col_tar1, col_tar2 = st.columns(2)
+                with col_tar1:
+                    precio_local_edit = st.number_input(
+                        "Tarifa Local ($/serial)",
+                        min_value=0.0, value=precio_local_busq, step=500.0, format="%.0f",
+                        key="tar_local_busq"
+                    )
+                with col_tar2:
+                    precio_nac_edit = st.number_input(
+                        "Tarifa Nacional ($/serial)",
+                        min_value=0.0, value=precio_nacional_busq, step=500.0, format="%.0f",
+                        key="tar_nac_busq"
+                    )
 
-            col_p1, col_p2, col_p3 = st.columns([1.5, 1.5, 1])
-
-            with col_p1:
-                st.write(f"**Precio(s) actual(es):** {precios_str}")
-                st.write(f"**Seriales:** {total_seriales_planilla:,} | **Valor actual:** ${total_valor_planilla:,.0f}")
-
-            with col_p2:
-                nuevo_precio_planilla = st.number_input(
-                    "Nuevo Precio Unitario ($)",
-                    min_value=0.0,
-                    value=precio_promedio_planilla,
-                    step=50.0,
-                    key="nuevo_precio_toda_planilla"
-                )
-                nuevo_valor_total_planilla = total_seriales_planilla * nuevo_precio_planilla
-                st.caption(f"Nuevo valor total: **${nuevo_valor_total_planilla:,.0f}**")
-
-            with col_p3:
-                st.write("")
-                st.write("")
-                if nuevo_precio_planilla != precio_promedio_planilla or len(precios_actuales) > 1:
-                    if st.button("Aplicar precio a toda la planilla", type="primary", key="btn_cambiar_precio_planilla"):
+                # Guardar tarifas en personal si cambiaron
+                if (precio_local_edit != precio_local_busq or precio_nac_edit != precio_nacional_busq):
+                    if st.button("💾 Guardar tarifas del mensajero", key="btn_save_tarifas_busq"):
                         try:
-                            cursor_upd = conn.cursor()
-                            ids_planilla = df_busq['id'].tolist()
-                            actualizados_precio = 0
-
-                            for gestion_id in ids_planilla:
-                                cursor_upd.execute(
-                                    "SELECT total_seriales FROM gestiones_mensajero WHERE id = %s",
-                                    (gestion_id,)
-                                )
-                                res = cursor_upd.fetchone()
-                                if res:
-                                    valor_reg = res[0] * nuevo_precio_planilla
-                                    cursor_upd.execute("""
-                                        UPDATE gestiones_mensajero
-                                        SET valor_unitario = %s, valor_total = %s, editado_manualmente = 1
-                                        WHERE id = %s
-                                    """, (nuevo_precio_planilla, valor_reg, gestion_id))
-                                    actualizados_precio += 1
-
+                            _cur_tar = conn.cursor()
+                            _cur_tar.execute(
+                                "UPDATE personal SET precio_local=%s, precio_nacional=%s WHERE codigo=%s",
+                                (precio_local_edit, precio_nac_edit, df_busq['cod_mensajero'].iloc[0])
+                            )
                             conn.commit()
-                            cursor_upd.close()
-                            msg_precio = f"Planilla {num_planilla}: precio actualizado a ${nuevo_precio_planilla:,.0f} en {actualizados_precio} registro(s)"
-                            st.success(msg_precio)
-                            st.session_state.planilla_buscada = None
+                            _cur_tar.close()
+                            st.success("Tarifas guardadas")
                             st.rerun()
                         except Exception as e:
                             conn.rollback()
                             st.error(f"Error: {e}")
+
+                st.caption("Selecciona **Local** o **Nacional** para cada fila. El precio se calcula automáticamente.")
+
+                # Construir tabla editable: una fila por registro de gestiones_mensajero
+                # La columna 'Tipo' determina qué tarifa se aplica.
+                df_editor_data = df_busq[['id', 'orden', 'cliente', 'tipo_gestion', 'cantidad_seriales']].copy()
+                df_editor_data.columns = ['id', 'Orden', 'Cliente', 'Ciudad/Tipo', 'Seriales']
+
+                # Pre-clasificar según tarifa actual: si precio==local→local, else→nacional
+                def _clasificar_tipo(row_precio):
+                    p = float(row_precio or 0)
+                    if p == precio_local_edit and precio_local_edit > 0:
+                        return 'local'
+                    return 'nacional'
+
+                df_editor_data['Tipo'] = df_busq['precio'].apply(_clasificar_tipo)
+                df_editor_data['Precio'] = df_editor_data['Tipo'].map(
+                    {'local': precio_local_edit, 'nacional': precio_nac_edit}
+                )
+                df_editor_data['Valor'] = df_editor_data['Seriales'] * df_editor_data['Precio']
+
+                df_editado = st.data_editor(
+                    df_editor_data.drop(columns=['id']),
+                    column_config={
+                        'Tipo': st.column_config.SelectboxColumn(
+                            'Tipo', options=['local', 'nacional'], required=True
+                        ),
+                        'Precio': st.column_config.NumberColumn('Precio $', disabled=True, format="$%.0f"),
+                        'Valor':  st.column_config.NumberColumn('Valor $',  disabled=True, format="$%.0f"),
+                        'Seriales': st.column_config.NumberColumn('Seriales', disabled=True),
+                    },
+                    use_container_width=True,
+                    hide_index=True,
+                    key="editor_ciudad_busq"
+                )
+
+                # Recalcular valor según tipo seleccionado
+                df_editado['Precio'] = df_editado['Tipo'].map(
+                    {'local': precio_local_edit, 'nacional': precio_nac_edit}
+                )
+                df_editado['Valor'] = df_editado['Seriales'] * df_editado['Precio']
+
+                total_nuevo = df_editado['Valor'].sum()
+                total_seriales_nuevo = df_editado['Seriales'].sum()
+                st.info(f"**Total:** {total_seriales_nuevo:,} seriales → **${total_nuevo:,.0f}**")
+
+                if st.button("💾 Aplicar precios por ciudad", type="primary", key="btn_aplicar_ciudad_busq"):
+                    try:
+                        cursor_upd = conn.cursor()
+                        ids_planilla = df_editor_data['id'].tolist()
+
+                        for i, gestion_id in enumerate(ids_planilla):
+                            tipo_sel  = df_editado.iloc[i]['Tipo']
+                            precio_sel = precio_local_edit if tipo_sel == 'local' else precio_nac_edit
+                            seriales  = int(df_editor_data.iloc[i]['Seriales'])
+                            valor_calc = seriales * precio_sel
+
+                            cursor_upd.execute("""
+                                UPDATE gestiones_mensajero
+                                SET valor_unitario = %s, valor_total = %s, editado_manualmente = 1
+                                WHERE id = %s
+                            """, (precio_sel, valor_calc, gestion_id))
+
+                        conn.commit()
+                        cursor_upd.close()
+                        st.success(f"Precios aplicados — Total: ${total_nuevo:,.0f}")
+                        st.session_state.planilla_buscada = None
+                        st.rerun()
+                    except Exception as e:
+                        conn.rollback()
+                        st.error(f"Error: {e}")
+
+            else:
+                # =====================================================
+                # MENSAJERO REGULAR: AJUSTAR PRECIO ÚNICO DE LA PLANILLA
+                # =====================================================
+                st.markdown("##### Ajustar Precio de toda la Planilla")
+
+                precios_actuales = df_busq['precio'].astype(float).unique()
+                precios_str = ", ".join([f"${p:,.0f}" for p in sorted(precios_actuales)])
+                precio_promedio_planilla = float(df_busq['valor_total'].astype(float).sum() / total_seriales_planilla) if total_seriales_planilla > 0 else 0.0
+
+                col_p1, col_p2, col_p3 = st.columns([1.5, 1.5, 1])
+
+                with col_p1:
+                    st.write(f"**Precio(s) actual(es):** {precios_str}")
+                    st.write(f"**Seriales:** {total_seriales_planilla:,} | **Valor actual:** ${total_valor_planilla:,.0f}")
+
+                with col_p2:
+                    nuevo_precio_planilla = st.number_input(
+                        "Nuevo Precio Unitario ($)",
+                        min_value=0.0,
+                        value=precio_promedio_planilla,
+                        step=50.0,
+                        key="nuevo_precio_toda_planilla"
+                    )
+                    nuevo_valor_total_planilla = total_seriales_planilla * nuevo_precio_planilla
+                    st.caption(f"Nuevo valor total: **${nuevo_valor_total_planilla:,.0f}**")
+
+                with col_p3:
+                    st.write("")
+                    st.write("")
+                    if nuevo_precio_planilla != precio_promedio_planilla or len(precios_actuales) > 1:
+                        if st.button("Aplicar precio a toda la planilla", type="primary", key="btn_cambiar_precio_planilla"):
+                            try:
+                                cursor_upd = conn.cursor()
+                                ids_planilla = df_busq['id'].tolist()
+                                actualizados_precio = 0
+
+                                for gestion_id in ids_planilla:
+                                    cursor_upd.execute(
+                                        "SELECT total_seriales FROM gestiones_mensajero WHERE id = %s",
+                                        (gestion_id,)
+                                    )
+                                    res = cursor_upd.fetchone()
+                                    if res:
+                                        valor_reg = res[0] * nuevo_precio_planilla
+                                        cursor_upd.execute("""
+                                            UPDATE gestiones_mensajero
+                                            SET valor_unitario = %s, valor_total = %s, editado_manualmente = 1
+                                            WHERE id = %s
+                                        """, (nuevo_precio_planilla, valor_reg, gestion_id))
+                                        actualizados_precio += 1
+
+                                conn.commit()
+                                cursor_upd.close()
+                                msg_precio = f"Planilla {num_planilla}: precio actualizado a ${nuevo_precio_planilla:,.0f} en {actualizados_precio} registro(s)"
+                                st.success(msg_precio)
+                                st.session_state.planilla_buscada = None
+                                st.rerun()
+                            except Exception as e:
+                                conn.rollback()
+                                st.error(f"Error: {e}")
 
             st.divider()
 

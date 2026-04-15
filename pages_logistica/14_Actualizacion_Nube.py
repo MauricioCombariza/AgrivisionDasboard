@@ -50,6 +50,9 @@ _BW_PASS = os.environ.get("DB_PASSWORD_BASES_WEB", "")
 _BW_NAME = os.environ.get("DB_NAME_BASES_WEB", "bases_web")
 
 # BD logistica  →  ordenes, gestiones_mensajero, clientes, precios… (escritura)
+# Puerto configurable: si MySQL del VPS no está expuesto en 3306, usar túnel SSH:
+#   ssh -L 3307:localhost:3306 -N -f -i ~/.ssh/agrivision_vps root@204.168.150.196
+# y cambiar DB_HOST=localhost / DB_PORT=3307 en .env
 _LG_HOST = os.environ.get("DB_HOST", "localhost")
 _LG_PORT = int(os.environ.get("DB_PORT", "3306"))
 _LG_USER = os.environ.get("DB_USER", "root")
@@ -133,6 +136,12 @@ def _conectar_logistica():
         )
     except Exception as exc:
         st.error(f"❌ No se pudo conectar a la nube (logistica): {exc}")
+        st.info(
+            f"🔧 **Solución:** El VPS MySQL ({_LG_HOST}:{_LG_PORT}) no es accesible directamente. "
+            "Abre un túnel SSH en otra terminal:  \n"
+            "`ssh -L 3307:localhost:3306 -N -f -i ~/.ssh/agrivision_vps root@204.168.150.196`  \n"
+            "Luego cambia en `.env`: `DB_HOST=localhost` y `DB_PORT=3307`"
+        )
         return None
 
 
