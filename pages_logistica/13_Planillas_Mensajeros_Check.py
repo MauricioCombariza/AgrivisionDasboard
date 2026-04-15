@@ -218,7 +218,12 @@ try:
             col_m1, col_m2, col_m3 = st.columns([1.5, 1.5, 1])
             with col_m1:
                 st.write(f"**Mensajero(s) actual(es):** {', '.join(mensajeros_en_planilla)}")
-                st.write(f"**Registros:** {len(registros)} | **Seriales:** {total_seriales_planilla:,} | **Valor:** ${total_valor_planilla:,.0f}")
+                _valor_label = f"${total_valor_planilla:,.0f}"
+                if es_courier_externo_busq:
+                    # Para couriers externos el valor en BD puede estar desactualizado;
+                    # el total correcto se recalcula abajo según clasificación local/nacional.
+                    _valor_label += " _(pendiente recalcular)_"
+                st.write(f"**Registros:** {len(registros)} | **Seriales:** {total_seriales_planilla:,} | **Valor:** {_valor_label}")
 
             with col_m2:
                 nuevo_men_planilla = st.selectbox(
@@ -562,10 +567,42 @@ try:
                             conn.commit()
                             cursor_upd.close()
 
+                            # Refrescar planilla_buscada con los valores recién guardados para
+                            # que la línea "Valor: $..." muestre el total correcto sin re-buscar.
+                            _cur_rf = conn.cursor(dictionary=True)
+                            _cur_rf.execute("""
+                                SELECT
+                                    gm.id,
+                                    gm.lot_esc as planilla,
+                                    gm.fecha_escaner as f_esc,
+                                    gm.total_seriales as cantidad_seriales,
+                                    gm.valor_unitario as precio,
+                                    gm.valor_total,
+                                    gm.cod_mensajero,
+                                    gm.cliente,
+                                    gm.tipo_gestion,
+                                    gm.orden,
+                                    gm.editado_manualmente,
+                                    p.nombre_completo as nombre_mensajero,
+                                    p.tipo_personal,
+                                    p.precio_local,
+                                    p.precio_nacional
+                                FROM gestiones_mensajero gm
+                                LEFT JOIN personal p ON gm.cod_mensajero = p.codigo
+                                WHERE gm.lot_esc = %s
+                                ORDER BY gm.fecha_escaner ASC
+                            """, (num_planilla,))
+                            _registros_frescos = _cur_rf.fetchall()
+                            _cur_rf.close()
+                            if _registros_frescos:
+                                st.session_state.planilla_buscada = {
+                                    'numero': num_planilla,
+                                    'registros': _registros_frescos,
+                                }
+
                             if errores_upd:
-                                st.warning(f"{len(errores_upd)} registro(s) con error: {errores_upd[:5]}")
+                                st.warning(f"{len(errores_upd)} registro(s) con fallback proporcional: {errores_upd[:3]}")
                             st.success(f"✅ Precios actualizados por ciudad — Total planilla: ${total_val:,.0f}")
-                            st.session_state.planilla_buscada = None
                             st.rerun()
                         except Exception as e:
                             conn.rollback()
