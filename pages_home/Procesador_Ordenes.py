@@ -7,11 +7,11 @@ import io
 import subprocess
 import tempfile
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy import create_engine as sa_create_engine
 
-load_dotenv()
-from pathlib import Path
+load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 
 
 
