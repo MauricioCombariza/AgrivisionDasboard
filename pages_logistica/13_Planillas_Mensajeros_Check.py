@@ -394,13 +394,13 @@ try:
                 if conn_bw:
                     try:
                         cur_bw = conn_bw.cursor(dictionary=True)
-                        # Agrupa por ciudad1 para ver cuántos seriales van a cada destino
+                        # En histo el número de planilla está en la columna 'planilla' (no lot_esc)
                         cur_bw.execute("""
                             SELECT
                                 COALESCE(NULLIF(TRIM(ciudad1), ''), 'Sin ciudad') AS ciudad,
                                 COUNT(*) AS seriales
                             FROM histo
-                            WHERE lot_esc = %s AND cod_men = %s
+                            WHERE planilla = %s AND cod_men = %s
                             GROUP BY ciudad
                             ORDER BY seriales DESC
                         """, (lot_esc_planilla, cod_men_planilla))
@@ -490,12 +490,13 @@ try:
                                 if conn_bw2:
                                     try:
                                         cur_bw2 = conn_bw2.cursor(dictionary=True)
+                                        # Misma corrección: usar columna 'planilla' en histo
                                         cur_bw2.execute("""
                                             SELECT
                                                 COALESCE(NULLIF(TRIM(ciudad1), ''), 'Sin ciudad') AS ciudad,
                                                 COUNT(*) AS cnt
                                             FROM histo
-                                            WHERE lot_esc = %s AND cod_men = %s AND orden = %s
+                                            WHERE planilla = %s AND cod_men = %s AND orden = %s
                                             GROUP BY ciudad
                                         """, (lot_esc_planilla, cod_men_planilla, orden_gm))
                                         ciudad_rows = cur_bw2.fetchall()
