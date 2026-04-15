@@ -1,16 +1,36 @@
 import streamlit as st
 import pandas as pd
 from datetime import date
+from pathlib import Path
 import sys
 import os
 
 import mysql.connector
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent.parent / ".env", override=True)
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from utils.db_connection import conectar_logistica
+
+
+def _conectar_bases_web():
+    """Conexión de lectura a bases_web (tabla histo) para obtener ciudad1 por serial."""
+    try:
+        return mysql.connector.connect(
+            host=os.environ.get("DB_HOST_BASES_WEB", "186.180.15.66"),
+            port=int(os.environ.get("DB_PORT_BASES_WEB", "12539")),
+            user=os.environ.get("DB_USER_BASES_WEB", "servilla_remoto"),
+            password=os.environ.get("DB_PASSWORD_BASES_WEB", ""),
+            database=os.environ.get("DB_NAME_BASES_WEB", "bases_web"),
+            connect_timeout=10,
+        )
+    except Exception as e:
+        st.warning(f"No se pudo conectar a bases_web: {e}")
+        return None
 
 st.title("📑 Planillas Mensajeros Check")
 
@@ -38,6 +58,12 @@ try:
         "ALTER TABLE gestiones_mensajero ADD COLUMN editado_manualmente TINYINT(1) NOT NULL DEFAULT 0",
         "ALTER TABLE personal ADD COLUMN precio_local DECIMAL(10,0) NULL DEFAULT NULL",
         "ALTER TABLE personal ADD COLUMN precio_nacional DECIMAL(10,0) NULL DEFAULT NULL",
+        # Tabla para persistir la clasificación local/nacional por ciudad (courier externo)
+        """CREATE TABLE IF NOT EXISTS ciudad_tipo (
+            ciudad    VARCHAR(150) NOT NULL PRIMARY KEY,
+            tipo      ENUM('local','nacional') NOT NULL DEFAULT 'nacional',
+            fecha_mod DATE NULL
+        )""",
     ]:
         try:
             _cur_init = conn.cursor()
@@ -310,12 +336,15 @@ try:
             if es_courier_externo_busq:
                 # =====================================================
                 # COURIER EXTERNO: AJUSTE DE PRECIO POR CIUDAD
-                # Cada fila de la planilla se clasifica como local o
-                # nacional para aplicar la tarifa correspondiente.
+                # 1. Consulta histo para obtener ciudad1 por serial
+                # 2. Muestra agrupación por ciudad con selector local/nacional
+                # 3. Persiste clasificación en tabla ciudad_tipo
+                # 4. Recalcula valor de cada registro de gestiones_mensajero
+                #    según cuántos de sus seriales son local vs nacional
                 # =====================================================
                 st.markdown("##### 🏙️ Ajuste de Precio por Ciudad (Courier Externo)")
 
-                # Mostrar tarifas almacenadas del mensajero y permitir ajustarlas
+                # ── Tarifas del mensajero ────────────────────────────────────
                 col_tar1, col_tar2 = st.columns(2)
                 with col_tar1:
                     precio_local_edit = st.number_input(
@@ -330,8 +359,7 @@ try:
                         key="tar_nac_busq"
                     )
 
-                # Guardar tarifas en personal si cambiaron
-                if (precio_local_edit != precio_local_busq or precio_nac_edit != precio_nacional_busq):
+                if precio_local_edit != precio_local_busq or precio_nac_edit != precio_nacional_busq:
                     if st.button("💾 Guardar tarifas del mensajero", key="btn_save_tarifas_busq"):
                         try:
                             _cur_tar = conn.cursor()
@@ -347,76 +375,179 @@ try:
                             conn.rollback()
                             st.error(f"Error: {e}")
 
-                st.caption("Selecciona **Local** o **Nacional** para cada fila. El precio se calcula automáticamente.")
+                # ── Cargar clasificaciones previas de ciudad_tipo ───────────
+                try:
+                    _cur_ct = conn.cursor(dictionary=True)
+                    _cur_ct.execute("SELECT ciudad, tipo FROM ciudad_tipo")
+                    ciudad_tipo_guardado = {r['ciudad']: r['tipo'] for r in _cur_ct.fetchall()}
+                    _cur_ct.close()
+                except Exception:
+                    ciudad_tipo_guardado = {}
 
-                # Construir tabla editable: una fila por registro de gestiones_mensajero
-                # La columna 'Tipo' determina qué tarifa se aplica.
-                df_editor_data = df_busq[['id', 'orden', 'cliente', 'tipo_gestion', 'cantidad_seriales']].copy()
-                df_editor_data.columns = ['id', 'Orden', 'Cliente', 'Ciudad/Tipo', 'Seriales']
+                # ── Consultar histo: seriales de la planilla agrupados por ciudad1 ──
+                cod_men_planilla = str(df_busq['cod_mensajero'].iloc[0])
+                lot_esc_planilla = str(num_planilla)
 
-                # Pre-clasificar según tarifa actual: si precio==local→local, else→nacional
-                def _clasificar_tipo(row_precio):
-                    p = float(row_precio or 0)
-                    if p == precio_local_edit and precio_local_edit > 0:
-                        return 'local'
-                    return 'nacional'
+                conn_bw = _conectar_bases_web()
+                df_ciudades = pd.DataFrame()
 
-                df_editor_data['Tipo'] = df_busq['precio'].apply(_clasificar_tipo)
-                df_editor_data['Precio'] = df_editor_data['Tipo'].map(
-                    {'local': precio_local_edit, 'nacional': precio_nac_edit}
-                )
-                df_editor_data['Valor'] = df_editor_data['Seriales'] * df_editor_data['Precio']
-
-                df_editado = st.data_editor(
-                    df_editor_data.drop(columns=['id']),
-                    column_config={
-                        'Tipo': st.column_config.SelectboxColumn(
-                            'Tipo', options=['local', 'nacional'], required=True
-                        ),
-                        'Precio': st.column_config.NumberColumn('Precio $', disabled=True, format="$%.0f"),
-                        'Valor':  st.column_config.NumberColumn('Valor $',  disabled=True, format="$%.0f"),
-                        'Seriales': st.column_config.NumberColumn('Seriales', disabled=True),
-                    },
-                    use_container_width=True,
-                    hide_index=True,
-                    key="editor_ciudad_busq"
-                )
-
-                # Recalcular valor según tipo seleccionado
-                df_editado['Precio'] = df_editado['Tipo'].map(
-                    {'local': precio_local_edit, 'nacional': precio_nac_edit}
-                )
-                df_editado['Valor'] = df_editado['Seriales'] * df_editado['Precio']
-
-                total_nuevo = df_editado['Valor'].sum()
-                total_seriales_nuevo = df_editado['Seriales'].sum()
-                st.info(f"**Total:** {total_seriales_nuevo:,} seriales → **${total_nuevo:,.0f}**")
-
-                if st.button("💾 Aplicar precios por ciudad", type="primary", key="btn_aplicar_ciudad_busq"):
+                if conn_bw:
                     try:
-                        cursor_upd = conn.cursor()
-                        ids_planilla = df_editor_data['id'].tolist()
+                        cur_bw = conn_bw.cursor(dictionary=True)
+                        # Agrupa por ciudad1 para ver cuántos seriales van a cada destino
+                        cur_bw.execute("""
+                            SELECT
+                                COALESCE(NULLIF(TRIM(ciudad1), ''), 'Sin ciudad') AS ciudad,
+                                COUNT(*) AS seriales
+                            FROM histo
+                            WHERE lot_esc = %s AND cod_men = %s
+                            GROUP BY ciudad
+                            ORDER BY seriales DESC
+                        """, (lot_esc_planilla, cod_men_planilla))
+                        rows_bw = cur_bw.fetchall()
+                        cur_bw.close()
+                        conn_bw.close()
 
-                        for i, gestion_id in enumerate(ids_planilla):
-                            tipo_sel  = df_editado.iloc[i]['Tipo']
-                            precio_sel = precio_local_edit if tipo_sel == 'local' else precio_nac_edit
-                            seriales  = int(df_editor_data.iloc[i]['Seriales'])
-                            valor_calc = seriales * precio_sel
+                        if rows_bw:
+                            df_ciudades = pd.DataFrame(rows_bw)
+                            # Pre-rellenar tipo desde clasificaciones guardadas
+                            df_ciudades['tipo'] = df_ciudades['ciudad'].map(
+                                lambda c: ciudad_tipo_guardado.get(c, 'nacional')
+                            )
+                        else:
+                            st.warning("No se encontraron seriales en histo para esta planilla y mensajero.")
+                    except Exception as e_bw:
+                        st.warning(f"Error al consultar histo: {e_bw}")
 
-                            cursor_upd.execute("""
-                                UPDATE gestiones_mensajero
-                                SET valor_unitario = %s, valor_total = %s, editado_manualmente = 1
-                                WHERE id = %s
-                            """, (precio_sel, valor_calc, gestion_id))
+                if df_ciudades.empty:
+                    st.info("Sin datos de ciudad desde histo. Usa el ajuste manual abajo.")
+                else:
+                    # ── Tabla editable: una fila por ciudad ─────────────────
+                    st.caption(
+                        "Clasifica cada ciudad como **local** o **nacional**. "
+                        "La clasificación se guarda para futuras planillas del mismo mensajero."
+                    )
 
-                        conn.commit()
-                        cursor_upd.close()
-                        st.success(f"Precios aplicados — Total: ${total_nuevo:,.0f}")
-                        st.session_state.planilla_buscada = None
-                        st.rerun()
-                    except Exception as e:
-                        conn.rollback()
-                        st.error(f"Error: {e}")
+                    df_editor_ciudades = df_ciudades[['ciudad', 'seriales', 'tipo']].copy()
+                    df_editor_ciudades.columns = ['Ciudad', 'Seriales', 'Tipo']
+
+                    df_ciudad_editado = st.data_editor(
+                        df_editor_ciudades,
+                        column_config={
+                            'Ciudad':   st.column_config.TextColumn('Ciudad', disabled=True),
+                            'Seriales': st.column_config.NumberColumn('Seriales', disabled=True),
+                            'Tipo': st.column_config.SelectboxColumn(
+                                'Tipo', options=['local', 'nacional'], required=True
+                            ),
+                        },
+                        use_container_width=True,
+                        hide_index=True,
+                        key="editor_ciudades_busq"
+                    )
+
+                    # Calcular resumen local / nacional con las tarifas actuales
+                    tipo_map = dict(zip(df_ciudad_editado['Ciudad'], df_ciudad_editado['Tipo']))
+                    df_ciudad_editado['Precio'] = df_ciudad_editado['Tipo'].map(
+                        {'local': precio_local_edit, 'nacional': precio_nac_edit}
+                    )
+                    df_ciudad_editado['Valor'] = df_ciudad_editado['Seriales'] * df_ciudad_editado['Precio']
+
+                    total_loc  = df_ciudad_editado[df_ciudad_editado['Tipo'] == 'local']['Seriales'].sum()
+                    total_nac  = df_ciudad_editado[df_ciudad_editado['Tipo'] == 'nacional']['Seriales'].sum()
+                    total_val  = df_ciudad_editado['Valor'].sum()
+                    st.dataframe(
+                        df_ciudad_editado[['Ciudad', 'Seriales', 'Tipo', 'Precio', 'Valor']],
+                        use_container_width=True, hide_index=True
+                    )
+                    st.info(
+                        f"Local: **{total_loc:,}** seriales × ${precio_local_edit:,.0f} | "
+                        f"Nacional: **{total_nac:,}** seriales × ${precio_nac_edit:,.0f} | "
+                        f"**Total: ${total_val:,.0f}**"
+                    )
+
+                    if st.button("💾 Aplicar clasificación y actualizar precios", type="primary", key="btn_aplicar_ciudad_busq"):
+                        try:
+                            cursor_upd = conn.cursor()
+
+                            # 1. Persistir clasificaciones en ciudad_tipo para uso futuro
+                            for _, cr in df_ciudad_editado.iterrows():
+                                cursor_upd.execute("""
+                                    INSERT INTO ciudad_tipo (ciudad, tipo, fecha_mod)
+                                    VALUES (%s, %s, CURDATE())
+                                    ON DUPLICATE KEY UPDATE tipo = VALUES(tipo), fecha_mod = CURDATE()
+                                """, (cr['Ciudad'], cr['Tipo']))
+
+                            # 2. Para cada registro de gestiones_mensajero en la planilla,
+                            #    recalcular valor según cuántos de sus seriales son local vs nacional.
+                            #    Se consulta histo agrupado por (orden, ciudad1) para ese registro.
+                            conn_bw2 = _conectar_bases_web()
+                            errores_upd = []
+
+                            for _, gm_row in df_busq.iterrows():
+                                gestion_id = int(gm_row['id'])
+                                orden_gm   = str(gm_row['orden'])
+
+                                if conn_bw2:
+                                    try:
+                                        cur_bw2 = conn_bw2.cursor(dictionary=True)
+                                        cur_bw2.execute("""
+                                            SELECT
+                                                COALESCE(NULLIF(TRIM(ciudad1), ''), 'Sin ciudad') AS ciudad,
+                                                COUNT(*) AS cnt
+                                            FROM histo
+                                            WHERE lot_esc = %s AND cod_men = %s AND orden = %s
+                                            GROUP BY ciudad
+                                        """, (lot_esc_planilla, cod_men_planilla, orden_gm))
+                                        ciudad_rows = cur_bw2.fetchall()
+                                        cur_bw2.close()
+
+                                        # Calcular valor: cada ciudad aporta según su tipo
+                                        nuevo_valor = 0.0
+                                        for cr in ciudad_rows:
+                                            t = tipo_map.get(cr['ciudad'], 'nacional')
+                                            p = precio_local_edit if t == 'local' else precio_nac_edit
+                                            nuevo_valor += cr['cnt'] * p
+
+                                        total_ser = int(gm_row['cantidad_seriales'])
+                                        # precio_unitario = promedio ponderado
+                                        precio_unit = nuevo_valor / total_ser if total_ser > 0 else 0.0
+
+                                    except Exception as e_ord:
+                                        errores_upd.append(f"Gestion {gestion_id}: {e_ord}")
+                                        nuevo_valor  = float(gm_row['valor_total'])
+                                        precio_unit  = float(gm_row['precio'])
+                                else:
+                                    # Sin conexión a histo: usar proporción global local/nacional
+                                    total_histo = total_loc + total_nac
+                                    if total_histo > 0:
+                                        prop_loc = total_loc / total_histo
+                                        prop_nac = total_nac / total_histo
+                                    else:
+                                        prop_loc, prop_nac = 0, 1
+                                    total_ser    = int(gm_row['cantidad_seriales'])
+                                    nuevo_valor  = total_ser * (prop_loc * precio_local_edit + prop_nac * precio_nac_edit)
+                                    precio_unit  = nuevo_valor / total_ser if total_ser > 0 else 0.0
+
+                                cursor_upd.execute("""
+                                    UPDATE gestiones_mensajero
+                                    SET valor_unitario = %s, valor_total = %s, editado_manualmente = 1
+                                    WHERE id = %s
+                                """, (round(precio_unit, 2), round(nuevo_valor, 2), gestion_id))
+
+                            if conn_bw2:
+                                conn_bw2.close()
+
+                            conn.commit()
+                            cursor_upd.close()
+
+                            if errores_upd:
+                                st.warning(f"{len(errores_upd)} registro(s) con error: {errores_upd[:5]}")
+                            st.success(f"✅ Precios actualizados por ciudad — Total planilla: ${total_val:,.0f}")
+                            st.session_state.planilla_buscada = None
+                            st.rerun()
+                        except Exception as e:
+                            conn.rollback()
+                            st.error(f"Error: {e}")
 
             else:
                 # =====================================================
