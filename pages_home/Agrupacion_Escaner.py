@@ -25,16 +25,30 @@ def conectar_db():
         return None
 
 def nueva_conexion():
-    """Conexion fresca (sin cache) para operaciones de escritura"""
+    """Conexion fresca (sin cache) para operaciones de escritura o lectura critica."""
     try:
         return mysql.connector.connect(
             host="localhost",
             user="root",
             password=os.environ.get("DB_PASSWORD_LOCAL", ""),
-            database="logistica"
+            database="logistica",
+            connection_timeout=10,
         )
     except Exception:
         return None
+
+
+def get_db():
+    """Conexion cacheada con auto-reconexion si la conexion MySQL caducó."""
+    conn = conectar_db()
+    if conn is None:
+        return None
+    try:
+        conn.ping(reconnect=True, attempts=3, delay=0)
+        return conn
+    except Exception:
+        conectar_db.clear()
+        return conectar_db()
 
 # Ruta del archivo CSV
 ruta_archivo = '/mnt/c/Users/mcomb/Desktop/Carvajal/python/dashboard.csv'
@@ -63,7 +77,8 @@ def cargar_mapeos(conn):
         mapeos = {m['nombre_csv'].upper(): m['nombre_bd'] for m in cursor.fetchall()}
         cursor.close()
         return mapeos
-    except:
+    except Exception as e:
+        st.warning(f"Error cargando mapeos: {e}")
         return {}
 
 # Cargar clientes de la BD
@@ -74,7 +89,8 @@ def cargar_clientes_bd(conn):
         clientes = cursor.fetchall()
         cursor.close()
         return clientes
-    except:
+    except Exception as e:
+        st.warning(f"Error cargando clientes: {e}")
         return []
 
 # Guardar mapeo
@@ -120,7 +136,8 @@ def cargar_precios_mensajero(conn):
                 if nuevo > precios[key]['devolucion']:
                     precios[key]['devolucion'] = nuevo
         return precios
-    except:
+    except Exception as e:
+        st.warning(f"Error cargando precios mensajero: {e}")
         return {}
 
 # Cargar personal activo (codigo -> id, nombre)
@@ -131,7 +148,8 @@ def cargar_personal_bd(conn):
         personal = {m['codigo']: {'id': m['id'], 'nombre': m['nombre_completo']} for m in cursor.fetchall()}
         cursor.close()
         return personal
-    except:
+    except Exception as e:
+        st.warning(f"Error cargando personal: {e}")
         return {}
 
 # ============================================
@@ -224,6 +242,7 @@ def sincronizar_periodo(df_periodo, conn_sync):
     actualizados = 0
     errores = []
 
+    import re as _re
     for _, row in resultado.iterrows():
         try:
             lot_esc_val = str(row['lot_esc'])
@@ -236,6 +255,11 @@ def sincronizar_periodo(df_periodo, conn_sync):
             tipo_gestion = row['mot_esc']
             cliente = row['no_entidad']
             cod_men_val = row['cod_men']
+
+            # Rechazar códigos sin formato exacto de 4 dígitos
+            if not _re.match(r'^\d{4}$', str(cod_men_val)):
+                errores.append(f"Código inválido ignorado: '{cod_men_val}' (planilla {lot_esc_val})")
+                continue
 
             cursor_reg.execute("""
                 SELECT id FROM gestiones_mensajero
@@ -345,7 +369,8 @@ with tab1:
             fechas_bd = {r['fecha_escaner']: int(r['seriales_bd']) for r in cursor_sync.fetchall()}
             cursor_sync.close()
 
-            # Comparar a nivel de fecha individual
+            # Siempre re-procesar todas las fechas del CSV para actualizar
+            # valores, precios, tipo_gestion y planillas aunque los conteos coincidan.
             fechas_estado = []
             for _, row in fechas_csv.iterrows():
                 fecha = row['f_esc']
@@ -353,14 +378,14 @@ with tab1:
                 bd_count = fechas_bd.get(fecha, 0)
                 diferencia = csv_count - bd_count
 
-                if diferencia > 0:
-                    estado = "Pendiente"
-                    fechas_pendientes.append(fecha)
-                elif diferencia == 0:
-                    estado = "OK"
+                if diferencia == 0:
+                    estado = "Actualizar"
+                elif diferencia > 0:
+                    estado = "Pendiente (faltan seriales)"
                 else:
-                    estado = "OK (otras fuentes)"
+                    estado = "Otras fuentes"
 
+                fechas_pendientes.append(fecha)
                 fechas_estado.append({
                     'Fecha': fecha,
                     'Seriales CSV': csv_count,
@@ -373,13 +398,18 @@ with tab1:
             st.dataframe(df_estado, use_container_width=True, hide_index=True)
 
             if fechas_pendientes:
-                total_diferencia = df_estado[df_estado['Estado'] == 'Pendiente']['Diferencia'].sum()
+                n_nuevas = len(df_estado[df_estado['Estado'] == 'Pendiente (faltan seriales)'])
+                n_actualizar = len(df_estado[df_estado['Estado'].isin(['Actualizar', 'Otras fuentes'])])
 
-                # Clave unica para evitar re-sincronizar las mismas fechas en loop
+                # Clave unica por sesion para evitar loop infinito de reruns
                 sync_key = "sync_done_" + "_".join(sorted(fechas_pendientes))
 
                 if sync_key not in st.session_state:
-                    st.info(f"Sincronizando automaticamente {len(fechas_pendientes)} fechas pendientes ({total_diferencia:,} seriales de diferencia)...")
+                    st.info(
+                        f"Sincronizando {len(fechas_pendientes)} fechas — "
+                        f"{n_nuevas} con seriales nuevos, {n_actualizar} para actualizar valores. "
+                        f"Planillas revisadas y con candado quedan protegidas."
+                    )
 
                     cargar_datos.clear()
                     df_fresh = cargar_datos()
@@ -418,9 +448,13 @@ with tab1:
                     st.session_state[sync_key] = True
                     st.rerun()
                 else:
-                    st.success("Fechas sincronizadas en esta sesion. Las diferencias restantes se deben a la deduplicacion de seriales.")
+                    st.success(
+                        f"Sincronizacion completada en esta sesion — "
+                        f"{n_nuevas} fechas con seriales nuevos procesadas, "
+                        f"{n_actualizar} fechas con valores actualizados."
+                    )
             else:
-                st.success(f"Todas las fechas de {anio_seleccionado} estan sincronizadas con la BD")
+                st.success(f"No hay fechas del CSV para {anio_seleccionado}")
 
         except Exception as e:
             st.error(f"Error en sincronizacion: {e}")
@@ -706,9 +740,10 @@ with tab1:
         st.divider()
         st.markdown("### Registrar Gestiones en Base de Datos")
 
-        conn_gest = conectar_db()
+        # Siempre conexion fresca para lecturas criticas y escrituras
+        conn_gest = nueva_conexion()
         if conn_gest:
-            # Cargar precios y personal
+            # Cargar precios y personal con conexion limpia
             precios_mensajero = cargar_precios_mensajero(conn_gest)
             personal_bd = cargar_personal_bd(conn_gest)
 
@@ -755,6 +790,10 @@ with tab1:
             sin_mensajero = df_gestiones[df_gestiones['mensajero_nombre'] == 'Sin asignar']['cod_men'].unique()
             if len(sin_mensajero) > 0:
                 st.info(f"Codigos de mensajero sin asignar en BD: {list(sin_mensajero)}")
+                if personal_bd:
+                    st.caption(f"Codigos disponibles en BD (primeros 20): {sorted(list(personal_bd.keys()))[:20]}")
+                else:
+                    st.warning("No se pudo cargar personal desde BD — verifica conexion")
 
             # Selector de fecha de registro
             from datetime import date
@@ -781,6 +820,7 @@ with tab1:
                     barra = st.progress(0)
                     total_filas = len(df_gestiones)
 
+                    import re as _re
                     for i, (_, row) in enumerate(df_gestiones.iterrows()):
                         try:
                             lot_esc_val = str(row['lot_esc'])
@@ -792,6 +832,11 @@ with tab1:
                             # Saltar planillas marcadas como revisadas
                             if lot_esc_val in _planillas_rev_reg:
                                 omitidos_rev += 1
+                                continue
+
+                            # Rechazar códigos sin formato exacto de 4 dígitos
+                            if not _re.match(r'^\d{4}$', str(cod_men_val)):
+                                errores_reg.append(f"Código inválido ignorado: '{cod_men_val}' (planilla {lot_esc_val})")
                                 continue
 
                             # Verificar si ya existe
@@ -857,6 +902,11 @@ with tab1:
                     if omitidos_rev > 0:
                         msg_reg += f" | {omitidos_rev} omitido(s) por planilla revisada 🔒"
                     st.success(msg_reg)
+                    if insertados == 0 and actualizados == 0 and omitidos_rev == 0 and not errores_reg:
+                        st.info(
+                            "Todos los registros ya existen en BD y tienen edicion manual activa (editado_manualmente=1). "
+                            "Para forzar la actualizacion, desactiva el candado en la pagina Planillas Mensajeros."
+                        )
                     if errores_reg:
                         with st.expander(f"Ver {len(errores_reg)} errores"):
                             for err in errores_reg:
@@ -909,6 +959,17 @@ def eliminar_mapeo_da(conn, nombre_da):
         st.error(f"Error eliminando mapeo DA: {e}")
         return False
 
+def cargar_personal_por_nombre(conn):
+    """Retorna {NOMBRE_COMPLETO_UPPER: codigo} para resolver DAs por nombre directamente de personal."""
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT codigo, nombre_completo FROM personal WHERE activo = TRUE")
+        resultado = {r['nombre_completo'].upper().strip(): r['codigo'] for r in cursor.fetchall()}
+        cursor.close()
+        return resultado
+    except Exception:
+        return {}
+
 with tab2:
     st.subheader("Ingreso Masivo de Ordenes de Paquetes")
     st.info("Carga un archivo Excel con las entregas y genera un CSV en formato de agrupacion")
@@ -921,6 +982,7 @@ with tab2:
 
     if conn_da:
         mapeo_da_bd = cargar_mapeo_da(conn_da)
+        personal_por_nombre = cargar_personal_por_nombre(conn_da)
 
         with st.expander("Ver/Editar mapeo de DA", expanded=False):
             # Mostrar mapeos actuales
@@ -970,6 +1032,7 @@ with tab2:
                         st.rerun()
     else:
         mapeo_da_bd = {}
+        personal_por_nombre = {}
         st.error("No se pudo conectar a la BD")
 
     st.divider()
@@ -1013,8 +1076,13 @@ with tab2:
             # Procesar datos
             if st.button("Procesar Datos", type="primary"):
                 with st.spinner("Procesando..."):
-                    # 1. Mapeo de DA a cod_men (desde BD)
-                    df_paq['cod_men'] = df_paq['DA'].map(mapeo_da_bd)
+                    # 1. Mapeo de DA a cod_men: primero mapeo_da, luego personal por nombre
+                    def resolver_da(nombre_da):
+                        if nombre_da in mapeo_da_bd:
+                            return mapeo_da_bd[nombre_da]
+                        return personal_por_nombre.get(str(nombre_da).upper().strip())
+
+                    df_paq['cod_men'] = df_paq['DA'].apply(resolver_da)
 
                     # Verificar DAs no mapeados
                     das_no_mapeados = df_paq[df_paq['cod_men'].isna()]['DA'].unique()

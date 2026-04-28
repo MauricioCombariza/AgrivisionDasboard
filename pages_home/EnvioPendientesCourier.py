@@ -36,11 +36,14 @@ def cargar_couriers():
         "WHERE activo = TRUE AND tipo_personal = 'courier_externo' ORDER BY nombre_completo"
     )
     intentos = [
+        {"host": "localhost",
+         "user": "root",
+         "password": os.getenv("DB_PASSWORD_LOCAL", ""),
+         "connect_timeout": 5},
         {"host": os.getenv("DB_HOST", "204.168.150.196"),
          "user": os.getenv("DB_USER", "root"),
          "password": os.getenv("DB_PASSWORD", ""),
          "connect_timeout": 5},
-        {"host": "localhost", "user": "root", "password": "", "connect_timeout": 5},
     ]
     for cfg in intentos:
         try:

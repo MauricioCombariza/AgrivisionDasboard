@@ -131,14 +131,14 @@ def preprocesar_direccion(direccion):
 
     # Separar tipo pegado a numero antes de buscar: "call100" → "call 100"
     direccion = re.sub(
-        r'\b(calle|call|cl|cll|carrera|carre|crra|crr|cr|kr|kra|cra|diagonal|dig|dg|transversal|trv|tv|tr|avenida|av)(\d)',
+        r'\b(calle|call|cl|cll|carrera|carre|crra|crr|cr|kr|kra|cra|diagonal|dig|dg|transversal|trasversal|transv|trv|tv|tr|avenida|av)(\d)',
         r'\1 \2', direccion, flags=re.IGNORECASE
     )
 
     # Buscar primer tipo de via reconocido
     tipo_pattern = (
         r'\b(calle|call|cl|cll|carrera|carre|crra|crr|cr|kr|kra|cra|'
-        r'diagonal|dig|dg|transversal|trv|tv|tr|avenida|av)\b'
+        r'diagonal|dig|dg|transversal|trasversal|transv|trv|tv|tr|avenida|av)\b'
     )
     match = re.search(tipo_pattern, direccion, flags=re.IGNORECASE)
 
@@ -176,7 +176,7 @@ def normalizar_tipo_via(direccion):
         r'\b(calle|call|cl|cll)\b': 'CL',
         r'\b(carrera|carre|crra|crr|cr|kr|kra|cra)\b': 'CR',
         r'\b(diagonal|dig|dg)\b': 'DG',
-        r'\b(transversal|trv|tv|tr)\b': 'TR',
+        r'\b(transversal|trasversal|transv|trv|tv|tr)\b': 'TR',
         r'\b(avenida|av)\b': 'AV'
     }
     for patron, reemplazo in tipos_via.items():
@@ -187,7 +187,7 @@ def normalizar_tipo_via(direccion):
 def separar_componentes_pegados(direccion):
     # Separar tipo pegado a numero: "calle75" → "calle 75", "call100" → "call 100"
     direccion = re.sub(
-        r'\b(calle|call|cl|cll|carrera|carre|crra|crr|cr|kr|kra|cra|diagonal|dig|dg|transversal|trv|tv|tr|avenida|av)(\d)',
+        r'\b(calle|call|cl|cll|carrera|carre|crra|crr|cr|kr|kra|cra|diagonal|dig|dg|transversal|trasversal|transv|trv|tv|tr|avenida|av)(\d)',
         r'\1 \2', direccion, flags=re.IGNORECASE
     )
     # Separar # pegado: "#67" → "# 67"
@@ -297,9 +297,9 @@ def extraer_punto_cardinal(direccion):
 
 def eliminar_info_adicional(direccion):
     palabras_eliminar = [
-        r'\bAP\b.*', r'\bAPO\b.*', r'\bapto\b.*', r'\bapartamento\b.*',
-        r'\bBL\d*\b', r'\bbloque\b.*',
-        r'\bTO\b.*', r'\btorre\b.*',
+        r'\bAP\b.*', r'\bAPO\b.*', r'\bapto\w*.*', r'\bapartamento\w*.*',
+        r'\bBL\d*\b', r'\bbloque\w*.*',
+        r'\bTO\b.*', r'\btorre\w*.*',
         r'\bMZ\b.*', r'\bmanzana\b.*',
         r'\bCA\b.*', r'\bcasa\b.*',
         r'\bLC\b.*', r'\blocal\b.*',
@@ -307,6 +307,7 @@ def eliminar_info_adicional(direccion):
         r'\bOF\b.*', r'\boficina\b.*',
         r'\bCONJ\b.*', r'\bconjunto\b.*',
         r'\bBarrios?\b.*', r'\bBogota.*', r'\bCundinamarca.*',
+        r'\b(?:primer|segundo|tercer|cuarto|quinto)\b.*',
         r'\bPiso.*', r'\bPS\b.*',
         r'\bINT\b.*', r'\binterior\b.*',
         r'\bEST\b.*',
@@ -385,6 +386,14 @@ def estandarizar_direccion(direccion_original):
     direccion = re.sub(r'\bD\s*C\b', '', direccion, flags=re.IGNORECASE)
     direccion = re.sub(r'\s+', ' ', direccion).strip()
 
+    # Paso 3.7: pegar letra suelta a número precedente cuando va seguida de cardinal
+    # "52 b sur" → "52b sur"  para que extraer_punto_cardinal lo reconozca
+    direccion = re.sub(
+        r'(\d+)\s+([A-Za-z])\s+(sur\s*este|sur\s*oeste|norte\s*este|norte\s*oeste|sur|norte|este|oeste)\b',
+        r'\1\2 \3', direccion, flags=re.IGNORECASE
+    )
+    direccion = re.sub(r'\s+', ' ', direccion).strip()
+
     # Paso 4: Extraer punto cardinal (tambien maneja cardinal en medio)
     direccion, cardinal = extraer_punto_cardinal(direccion)
 
@@ -397,7 +406,13 @@ def estandarizar_direccion(direccion_original):
     # Paso 7: Normalizar tipo de via
     direccion = normalizar_tipo_via(direccion)
 
-    # Paso 7.5: Eliminar segundo tipo de via (separador): "CL 71A CR 29B 14" → "CL 71A 29B 14"
+    # Paso 7.5: Eliminar segundo tipo de via
+    # Primero: quitar TYPE+NUM duplicado: "CR 52 CR 52 78" → "CR 52 78"
+    direccion = re.sub(
+        r'(\b(?:CL|CR|DG|TR|AV)\s+(\d+[A-Za-z]*))\s+(?:CL|CR|DG|TR|AV)\s+\2(?=\s|$)',
+        r'\1', direccion, flags=re.IGNORECASE
+    )
+    # Luego: quitar TYPE separador no duplicado: "CL 71A CR 29B 14" → "CL 71A 29B 14"
     direccion = re.sub(
         r'(\b(?:CL|CR|DG|TR|AV)\s+\d+[A-Za-z]*(?:BIS[A-Za-z]?)?)\s+(?:CL|CR|DG|TR|AV)\s+',
         r'\1 ', direccion, flags=re.IGNORECASE

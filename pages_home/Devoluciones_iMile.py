@@ -112,10 +112,10 @@ def _conectar_imile():
     """Conexión al imile local (MySQL)."""
     try:
         return mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="",
-            database="imile",
+            host=os.getenv("DB_HOST_IMILE", "localhost"),
+            user=os.getenv("DB_USER_IMILE", "root"),
+            password=os.getenv("DB_PASSWORD_IMILE", ""),
+            database=os.getenv("DB_NAME_IMILE", "imile"),
         )
     except mysql.connector.Error:
         return None
@@ -167,23 +167,25 @@ def _cargar_lote(seriales: list[str]) -> pd.DataFrame:
             dir_std   = estandarizar_direccion(datos["direccion"] or "")
             localidad = buscar_localidad(dir_std) if dir_std else ""
             filas.append({
-                "serial":       datos["serial"],
-                "nombre":       datos["nombre"]   or "",
-                "telefono":     datos["telefono"] or "",
-                "direccion":    datos["direccion"] or "",
-                "localidad":    localidad          or "",
-                "wa_capturado": False,
-                "imile_subido": False,
+                "serial":            datos["serial"],
+                "nombre":            datos["nombre"]   or "",
+                "telefono":          datos["telefono"] or "",
+                "direccion":         datos["direccion"] or "",
+                "direccion_ajustada": dir_std           or "",
+                "localidad":         localidad          or "",
+                "wa_capturado":      False,
+                "imile_subido":      False,
             })
         else:
             filas.append({
-                "serial":       serial,
-                "nombre":       "NO ENCONTRADO",
-                "telefono":     "",
-                "direccion":    "",
-                "localidad":    "",
-                "wa_capturado": False,
-                "imile_subido": False,
+                "serial":            serial,
+                "nombre":            "NO ENCONTRADO",
+                "telefono":          "",
+                "direccion":         "",
+                "direccion_ajustada": "",
+                "localidad":         "",
+                "wa_capturado":      False,
+                "imile_subido":      False,
             })
         prog.progress(int((i + 1) / total * 100), text=f"Procesado {i+1}/{total}")
     prog.empty()
@@ -420,10 +422,10 @@ if st.session_state.devol_df is not None:
     df_vista = df.copy()
     df_vista["estado"] = df_vista.apply(_estado, axis=1)
     edited = st.data_editor(
-        df_vista[["serial", "nombre", "direccion", "localidad", "estado"]],
+        df_vista[["serial", "direccion_ajustada", "direccion", "localidad", "estado"]],
         width="stretch",
         hide_index=True,
-        disabled=["serial", "nombre", "direccion", "estado"],
+        disabled=["serial", "direccion_ajustada", "direccion", "estado"],
         key="tabla_resumen",
     )
     st.session_state.devol_df["localidad"] = edited["localidad"].values
@@ -473,8 +475,8 @@ if st.session_state.devol_df is not None:
         st.error(f"⚠️ Serial **{fila['serial']}** no se encontró en la BD. Pasa al siguiente.")
     else:
         ci1, ci2, ci3, ci4 = st.columns(4)
-        ci1.metric("Nombre",           fila["nombre"])
-        ci2.metric("Teléfono",         fila["telefono"])
+        ci1.metric("Dirección ajustada", fila.get("direccion_ajustada") or fila["direccion"] or "—")
+        ci2.metric("Teléfono",           fila["telefono"])
         ci3.metric("Localidad destino", fila["localidad"] or "—")
         ci4.metric("Estado",
                    f"{'✅' if fila['wa_capturado'] else '⬜'} WA  "

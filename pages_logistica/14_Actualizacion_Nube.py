@@ -17,6 +17,8 @@ configura al inicio; así cualquier dispositivo puede usar su propia ruta.
 import io
 import logging
 import os
+import subprocess
+import time
 import traceback
 from datetime import date as date_cls
 from pathlib import Path
@@ -119,31 +121,111 @@ def _get_histo_engine():
     return create_engine(url, pool_pre_ping=True)
 
 
+_VPS_SSH_HOST = "204.168.150.196"
+_VPS_SSH_KEY  = os.path.expanduser("~/.ssh/agrivision_vps")
+_TUNEL_CMD    = [
+    "ssh", "-L", f"{_LG_PORT}:localhost:3306",
+    "-N", "-f",
+    "-i", _VPS_SSH_KEY,
+    "-o", "StrictHostKeyChecking=no",
+    "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=10",
+    "root@" + _VPS_SSH_HOST,
+]
+
+
+def _tunel_activo() -> bool:
+    """Devuelve True si hay un proceso SSH escuchando en _LG_PORT."""
+    try:
+        r = subprocess.run(
+            ["ss", "-tlnp"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return f":{_LG_PORT}" in r.stdout
+    except Exception:
+        return False
+
+
+def _abrir_tunel() -> tuple[bool, str]:
+    """Lanza el túnel SSH en background usando Popen (no bloquea). Devuelve (ok, msg)."""
+    if _tunel_activo():
+        return True, "Túnel ya estaba activo."
+    try:
+        # Popen no espera a que el proceso termine — SSH con -f se desvincula solo
+        subprocess.Popen(
+            _TUNEL_CMD,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        # Esperar hasta 12 s a que el puerto levante (polling cada 1 s)
+        for _ in range(12):
+            time.sleep(1)
+            if _tunel_activo():
+                return True, "Túnel abierto correctamente."
+        return False, "SSH lanzado pero el puerto no levantó en 12 s. Verifica conectividad con el VPS."
+    except Exception as exc:
+        return False, f"Error al lanzar SSH: {exc}"
+
+
 def _conectar_logistica():
     """
-    Abre una conexión fresca a la BD logistica en la nube (escritura).
-    Las credenciales vienen de las variables de entorno _LG_*.
-    Retorna None (y muestra error) si falla.
+    Abre una conexión fresca a la BD logistica en la nube.
+    Si falla por conexión rechazada, intenta abrir el túnel SSH automáticamente.
     """
-    try:
+    def _intentar():
         return mysql.connector.connect(
             host=_LG_HOST,
             port=_LG_PORT,
             user=_LG_USER,
             password=_LG_PASS,
             database=_LG_NAME,
-            connect_timeout=15,
+            connect_timeout=10,
         )
-    except Exception as exc:
-        st.error(f"❌ No se pudo conectar a la nube (logistica): {exc}")
-        st.info(
-            f"🔧 **Solución:** El VPS MySQL ({_LG_HOST}:{_LG_PORT}) no es accesible directamente. "
-            "Abre un túnel SSH en otra terminal:  \n"
-            "`ssh -L 3307:localhost:3306 -N -f -i ~/.ssh/agrivision_vps root@204.168.150.196`  \n"
-            "Luego cambia en `.env`: `DB_HOST=localhost` y `DB_PORT=3307`"
-        )
+
+    try:
+        return _intentar()
+    except Exception as exc_1:
+        # Si el error es "Connection refused" y el host es localhost, intentar abrir túnel
+        if "111" in str(exc_1) or "Connection refused" in str(exc_1):
+            with st.spinner("Túnel SSH cerrado — abriendo automáticamente…"):
+                ok, msg = _abrir_tunel()
+            if ok:
+                st.success(f"Túnel SSH: {msg}")
+                try:
+                    return _intentar()
+                except Exception as exc_2:
+                    st.error(f"❌ Túnel abierto pero MySQL sigue sin responder: {exc_2}")
+                    return None
+            else:
+                st.error(f"❌ No se pudo abrir el túnel SSH: {msg}")
+                st.code(
+                    f"ssh -L {_LG_PORT}:localhost:3306 -N -f "
+                    f"-i {_VPS_SSH_KEY} root@{_VPS_SSH_HOST}"
+                )
+                return None
+        st.error(f"❌ No se pudo conectar a la nube (logistica): {exc_1}")
         return None
 
+
+# ---------------------------------------------------------------------------
+# ESTADO DEL TÚNEL SSH (visible antes del pipeline)
+# ---------------------------------------------------------------------------
+_col_t1, _col_t2 = st.columns([3, 1])
+with _col_t1:
+    if _tunel_activo():
+        st.success(f"Túnel SSH activo — MySQL nube en localhost:{_LG_PORT}")
+    else:
+        st.warning(f"Túnel SSH inactivo — localhost:{_LG_PORT} no responde")
+with _col_t2:
+    if st.button("Abrir túnel SSH", key="btn_tunel"):
+        ok, msg = _abrir_tunel()
+        if ok:
+            st.success(msg)
+            st.rerun()
+        else:
+            st.error(msg)
+
+st.divider()
 
 # ---------------------------------------------------------------------------
 # ESTADO DEL PIPELINE  (se almacena en session_state para sobrevivir reruns)
@@ -198,7 +280,9 @@ with st.expander(
                        retorno, ret_esc, serial,
                        f_esc, cod_men, lot_esc, mot_esc, cod_sec
                 FROM histo
-                ORDER BY CAST(NULLIF(TRIM(orden), '') AS SIGNED) DESC
+                ORDER BY
+                    (lot_esc + 0) DESC,
+                    (orden + 0) DESC
                 LIMIT {HISTO_LIMIT}
             """
 
@@ -899,99 +983,138 @@ with st.expander(
                     cur_op = conn_cl.cursor()
 
                     insertados, actualizados, errores = 0, 0, []
-                    total_rows = len(df_todos_gest)
 
                     barra  = st.progress(0)
                     status = st.empty()
 
-                    for i, (_, row) in enumerate(df_todos_gest.iterrows()):
+                    # ── 1. Normalizar lot_esc y orden en Python (sin queries) ──────
+                    def _norm_lot(v):
                         try:
-                            # lot_esc puede ser entero (agrupacion) o string tipo "IM20240315"
-                            lot_raw = row.get("lot_esc", "0")
-                            try:
-                                lot_esc_val = str(int(float(lot_raw)))
-                            except (ValueError, TypeError):
-                                lot_esc_val = str(lot_raw)
+                            return str(int(float(v)))
+                        except (ValueError, TypeError):
+                            return str(v)
 
-                            # Planillas revisadas no se tocan
-                            if lot_esc_val in planillas_revisadas:
-                                continue
+                    df_work = df_todos_gest.copy()
+                    df_work["_lot"] = df_work["lot_esc"].apply(_norm_lot)
+                    df_work["_ord"] = df_work["orden"].apply(_norm_lot)
 
-                            # orden puede ser entero o string tipo "IM20240315"
-                            ord_raw = row.get("orden", "0")
-                            try:
-                                orden_val = str(int(float(ord_raw)))
-                            except (ValueError, TypeError):
-                                orden_val = str(ord_raw)
+                    # Descartar planillas revisadas antes de cualquier query
+                    df_work = df_work[~df_work["_lot"].isin(planillas_revisadas)]
 
-                            tipo_gestion = str(row["mot_esc"])
-                            cliente      = str(row["no_entidad"])
-                            cod_men_val  = str(row["cod_men"])
-                            total_ser    = int(row["total_serial"])
+                    status.caption("Cargando registros existentes en memoria…")
+                    barra.progress(0.1)
 
-                            # Calcular precio según tipo de gestión
-                            cli_key  = cliente.upper().strip()
-                            mot_low  = tipo_gestion.lower().strip()
-                            tipo_precio = "entrega" if "entrega" in mot_low else "devolucion"
-                            valor_unit  = precios_men.get(cli_key, {}).get(tipo_precio, 0.0)
-                            valor_tot   = valor_unit * total_ser
+                    # ── 2. Una sola query para traer todos los existentes ─────────
+                    lotes_unicos = list(df_work["_lot"].unique())
+                    existentes: dict = {}  # (lot, ord, tipo, cli, cod) → {id, editado}
+                    if lotes_unicos:
+                        fmt_in = ",".join(["%s"] * len(lotes_unicos))
+                        cur_op.execute(
+                            f"""
+                            SELECT id, lot_esc, orden, tipo_gestion,
+                                   cliente, cod_mensajero, editado_manualmente
+                            FROM gestiones_mensajero
+                            WHERE lot_esc IN ({fmt_in})
+                            """,
+                            lotes_unicos,
+                        )
+                        for r in cur_op.fetchall():
+                            key = (str(r[1]), str(r[2]), str(r[3]), str(r[4]), str(r[5]))
+                            existentes[key] = {"id": r[0], "editado": r[6]}
 
-                            # ID del mensajero (puede ser None si el código no está en BD)
-                            m_id = personal_bd.get(cod_men_val, None)
+                    barra.progress(0.3)
+                    status.caption(f"Existentes en BD: {len(existentes):,} — clasificando…")
 
-                            # Verificar si ya existe el registro en gestiones_mensajero
-                            cur_op.execute(
-                                """
-                                SELECT id FROM gestiones_mensajero
-                                WHERE lot_esc = %s AND orden = %s
-                                  AND tipo_gestion = %s AND cliente = %s
-                                  AND cod_mensajero = %s
-                                """,
-                                (lot_esc_val, orden_val, tipo_gestion, cliente, cod_men_val),
+                    # ── 3. Clasificar filas: insertar / actualizar / ignorar ───────
+                    # Vectorizado con pandas (evita el lento iterrows)
+                    df_work["_cli_key"]    = df_work["no_entidad"].str.upper().str.strip()
+                    df_work["_tipo_precio"] = np.where(
+                        df_work["mot_esc"].str.lower().str.strip().str.contains("entrega"),
+                        "entrega", "devolucion",
+                    )
+                    df_work["_valor_unit"] = df_work.apply(
+                        lambda r: precios_men.get(r["_cli_key"], {}).get(r["_tipo_precio"], 0.0),
+                        axis=1,
+                    )
+                    df_work["_valor_tot"]  = df_work["_valor_unit"] * df_work["total_serial"].astype(int)
+                    df_work["_m_id"]       = df_work["cod_men"].map(personal_bd)
+                    df_work["_key"] = list(zip(
+                        df_work["_lot"], df_work["_ord"],
+                        df_work["mot_esc"].astype(str),
+                        df_work["no_entidad"].astype(str),
+                        df_work["cod_men"].astype(str),
+                    ))
+
+                    to_insert = []
+                    to_update = []
+
+                    for _, row in df_work.iterrows():
+                        key = row["_key"]
+                        if key in existentes:
+                            if existentes[key]["editado"] == 0:
+                                to_update.append((
+                                    int(row["total_serial"]),
+                                    row["_valor_unit"],
+                                    row["_valor_tot"],
+                                    existentes[key]["id"],
+                                ))
+                        elif row["_lot"] not in lotes_candado:
+                            to_insert.append((
+                                row["f_esc"], str(row["cod_men"]), row["_m_id"],
+                                row["_lot"], row["_ord"],
+                                str(row["mot_esc"]), str(row["no_entidad"]),
+                                int(row["total_serial"]),
+                                row["_valor_unit"], row["_valor_tot"],
+                                date_cls.today(), None,
+                            ))
+
+                    barra.progress(0.5)
+
+                    # ── 4. Batch INSERT ───────────────────────────────────────────
+                    if to_insert:
+                        status.caption(f"Insertando {len(to_insert):,} registros nuevos…")
+                        cur_op.executemany(
+                            """
+                            INSERT INTO gestiones_mensajero
+                            (fecha_escaner, cod_mensajero, mensajero_id,
+                             lot_esc, orden, tipo_gestion, cliente,
+                             total_seriales, valor_unitario, valor_total,
+                             fecha_registro, cod_sec)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            """,
+                            to_insert,
+                        )
+                        insertados = len(to_insert)
+
+                    barra.progress(0.75)
+
+                    # ── 5. Batch UPDATE via CASE WHEN (una query por chunk) ───────
+                    # executemany+UPDATE envía una query por fila → lento con SSH.
+                    # CASE WHEN agrupa 500 updates en una sola sentencia SQL.
+                    _UPDATE_CHUNK = 500
+                    if to_update:
+                        status.caption(f"Actualizando {len(to_update):,} registros…")
+                        for _i in range(0, len(to_update), _UPDATE_CHUNK):
+                            _chunk = to_update[_i : _i + _UPDATE_CHUNK]
+                            _when  = " ".join("WHEN %s THEN %s" for _ in _chunk)
+                            _in_ph = ", ".join("%s" for _ in _chunk)
+                            _params = (
+                                [x for r in _chunk for x in (r[3], r[0])]  # serial
+                                + [x for r in _chunk for x in (r[3], r[1])]  # val_unit
+                                + [x for r in _chunk for x in (r[3], r[2])]  # val_tot
+                                + [r[3] for r in _chunk]                      # WHERE IN
                             )
-                            existente = cur_op.fetchone()
-
-                            if existente:
-                                # Actualizar sólo si NO tiene candado manual
-                                cur_op.execute(
-                                    """
-                                    UPDATE gestiones_mensajero
-                                    SET total_seriales = %s,
-                                        valor_unitario = %s,
-                                        valor_total    = %s
-                                    WHERE id = %s AND editado_manualmente = 0
-                                    """,
-                                    (total_ser, valor_unit, valor_tot, existente[0]),
-                                )
-                                if cur_op.rowcount > 0:
-                                    actualizados += 1
-
-                            elif lot_esc_val not in lotes_candado:
-                                # Insertar sólo si el lote no tiene candado manual
-                                cur_op.execute(
-                                    """
-                                    INSERT INTO gestiones_mensajero
-                                    (fecha_escaner, cod_mensajero, mensajero_id,
-                                     lot_esc, orden, tipo_gestion, cliente,
-                                     total_seriales, valor_unitario, valor_total,
-                                     fecha_registro, cod_sec)
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                                    """,
-                                    (
-                                        row["f_esc"], cod_men_val, m_id,
-                                        lot_esc_val, orden_val, tipo_gestion, cliente,
-                                        total_ser, valor_unit, valor_tot,
-                                        date_cls.today(), None,
-                                    ),
-                                )
-                                insertados += 1
-
-                        except Exception as exc_row:
-                            errores.append(f"Fila {i + 1}: {exc_row}")
-
-                        if total_rows > 0 and i % 10 == 0:
-                            barra.progress((i + 1) / total_rows)
-                            status.caption(f"Procesando {i + 1}/{total_rows}…")
+                            cur_op.execute(
+                                f"""
+                                UPDATE gestiones_mensajero
+                                SET total_seriales = CASE id {_when} END,
+                                    valor_unitario = CASE id {_when} END,
+                                    valor_total    = CASE id {_when} END
+                                WHERE id IN ({_in_ph})
+                                """,
+                                _params,
+                            )
+                        actualizados = len(to_update)
 
                     conn_cl.commit()
                     barra.progress(1.0)

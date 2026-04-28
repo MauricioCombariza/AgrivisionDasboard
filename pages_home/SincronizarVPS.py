@@ -16,6 +16,11 @@ st.info("Sube las tablas locales al servidor web (VPS). Ejecuta esto después de
 VPS_HOST = "204.168.150.196"
 VPS_USER = "root"
 VPS_KEY  = os.path.expanduser("~/.ssh/agrivision_vps")
+# Si Streamlit corre como root, ~ apunta a /root; buscamos también en /home/mauro
+if not os.path.exists(VPS_KEY):
+    _alt = "/home/mauro/.ssh/agrivision_vps"
+    if os.path.exists(_alt):
+        VPS_KEY = _alt
 
 LOCAL_USER = "root"
 LOCAL_PASS = ""
@@ -35,6 +40,9 @@ TABLAS_BAJAR = {
 
 # ── Estado del VPS ────────────────────────────────────────────────────────────
 def verificar_conexion_vps():
+    """Devuelve (ok: bool, error: str | None)."""
+    if not os.path.exists(VPS_KEY):
+        return False, f"Clave SSH no encontrada en `{VPS_KEY}`"
     try:
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -42,9 +50,9 @@ def verificar_conexion_vps():
         _, stdout, _ = client.exec_command("echo OK")
         resultado = stdout.read().decode().strip()
         client.close()
-        return resultado == "OK"
+        return resultado == "OK", None
     except Exception as e:
-        return False
+        return False, str(e)
 
 # ── Helper: drenar stdout y stderr en paralelo para evitar deadlock SSH ───────
 def _leer_canal(ssh_stdout, ssh_stderr):
@@ -162,10 +170,12 @@ st.divider()
 # Verificar conexión
 if st.button("🔍 Verificar conexión al VPS"):
     with st.spinner("Conectando..."):
-        if verificar_conexion_vps():
-            st.success("✅ Conexión al VPS exitosa")
-        else:
-            st.error(f"❌ No se pudo conectar al VPS. Verifica que la clave SSH esté en `{VPS_KEY}`")
+        ok, error = verificar_conexion_vps()
+    if ok:
+        st.success("✅ Conexión al VPS exitosa")
+    else:
+        st.error(f"❌ No se pudo conectar al VPS")
+        st.code(error or "Error desconocido")
 
 st.divider()
 

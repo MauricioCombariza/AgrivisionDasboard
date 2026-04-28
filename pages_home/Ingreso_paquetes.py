@@ -3,6 +3,9 @@ import pandas as pd
 import sys
 import os
 import mysql.connector
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Configurar sys.path para importar utils
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -14,13 +17,13 @@ from utils.export import to_csv, to_excel
 
 
 def _conectar_local():
-    """Conexión directa al imile local (localhost), ignorando el .env."""
+    """Conexión al imile local usando credenciales del .env."""
     try:
         return mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="",
-            database="imile",
+            host=os.getenv("DB_HOST_IMILE", "localhost"),
+            user=os.getenv("DB_USER_IMILE", "root"),
+            password=os.getenv("DB_PASSWORD_IMILE", ""),
+            database=os.getenv("DB_NAME_IMILE", "imile"),
         )
     except mysql.connector.Error as e:
         st.error(f"No se pudo conectar al imile local: {e}")
@@ -64,13 +67,26 @@ def _guardar_en_bd_local(df: pd.DataFrame):
             conn.close()
     return ok, fail
 
-# Mapeo de columnas del Excel fuente a nombres internos
-COL_MAP = {
-    'Waybill number': 'serial',
-    "Recipient's name": 'nombre',
-    'Customer phone': 'telefono',
-    'Address2': 'direccion',
+# Nombres alternativos aceptados por columna interna
+COL_ALIASES = {
+    'serial':    ['Waybill number', 'Número de Guía'],
+    'nombre':    ["Recipient's name", 'El nombre del destinatario'],
+    'telefono':  ['Customer phone', 'Teléfono entrante'],
+    'direccion': ['Address2', 'Dirección detallada del destinatario'],
 }
+
+
+def _resolver_col_map(df_columns):
+    """Devuelve {col_excel: col_interna} eligiendo el alias presente en df_columns."""
+    col_map = {}
+    faltantes = []
+    for interno, aliases in COL_ALIASES.items():
+        encontrado = next((a for a in aliases if a in df_columns), None)
+        if encontrado:
+            col_map[encontrado] = interno
+        else:
+            faltantes.append(f"{interno} (esperado: {' o '.join(aliases)})")
+    return col_map, faltantes
 
 # Inicializar estados de sesión
 for key, default in [
@@ -119,8 +135,8 @@ def mostrar_subida_bases():
             st.warning("El archivo Excel está vacío.")
             return
 
-        # Renombrar columnas al estándar interno
-        faltantes = [c for c in COL_MAP if c not in df_raw.columns]
+        # Renombrar columnas al estándar interno (acepta nombres en inglés o español)
+        col_map, faltantes = _resolver_col_map(df_raw.columns)
         if faltantes:
             st.error(f"**Columnas requeridas no encontradas ({len(faltantes)}):**")
             for col in faltantes:
@@ -129,7 +145,7 @@ def mostrar_subida_bases():
                     "\n".join(f"- `{c}`" for c in df_raw.columns))
             return
 
-        df = df_raw[list(COL_MAP.keys())].rename(columns=COL_MAP).copy()
+        df = df_raw[list(col_map.keys())].rename(columns=col_map).copy()
         df['serial'] = df['serial'].astype(str)
         df['f_emi'] = fecha_entrega.strftime('%Y-%m-%d')
 
