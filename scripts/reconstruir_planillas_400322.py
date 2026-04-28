@@ -44,7 +44,7 @@ VPS_KEY  = "/home/mauro/.ssh/agrivision_vps"
 VPS_DB_USER = "root"
 VPS_DB_PASS = os.getenv("DB_PASSWORD", "Root2024!")
 
-LOT_ESC_INICIO = 400322
+LOT_ESC_INICIO = 400321
 FECHA_REGISTRO = date.today().isoformat()
 
 # ── Conectar ──────────────────────────────────────────────────────────────────
@@ -102,30 +102,29 @@ def cargar_personal(conn_local):
 # ── Leer datos desde histo ────────────────────────────────────────────────────
 def leer_histo(conn_web):
     """
-    Devuelve filas agrupadas por (lot_esc, cod_men, f_lleva, no_entidad, mot_esc, orden).
-    Filtra:
-      - cod_men vacío o '0' o '000'
-      - f_lleva que empieza con '.' (no entregado)
+    Devuelve filas agrupadas por (lot_esc, cod_men, f_esc, no_entidad, mot_esc, orden).
+    - Usa f_esc (fecha de escaneo) como fecha_escaner, NO f_lleva.
+    - Incluye cod_men='0000' (paquetes pendientes sin mensajero asignado).
+    - Solo filtra códigos no numéricos o vacíos.
     """
     cur = conn_web.cursor()
     cur.execute("""
         SELECT
             lot_esc,
             LPAD(TRIM(cod_men), 4, '0') AS cod_men_pad,
-            f_lleva,
+            f_esc,
             no_entidad,
             mot_esc,
             orden,
             COUNT(*)                    AS total_seriales
         FROM histo
         WHERE CAST(lot_esc AS UNSIGNED) >= %s
-          -- Solo códigos numéricos de 1–4 dígitos con valor > 0
-          AND TRIM(cod_men) REGEXP '^[0-9]{1,4}$'
-          AND CAST(TRIM(cod_men) AS UNSIGNED) BETWEEN 1 AND 9999
-          -- Solo registros con fecha de entrega real
-          AND TRIM(f_lleva) NOT LIKE '.%%'
-          AND TRIM(f_lleva) != ''
-        GROUP BY lot_esc, cod_men_pad, f_lleva, no_entidad, mot_esc, orden
+          -- Códigos numéricos de 1-4 dígitos O vacíos (pendientes sin mensajero asignado)
+          AND (TRIM(cod_men) REGEXP '^[0-9]{1,4}$' OR TRIM(cod_men) = '')
+          -- f_esc debe ser una fecha válida (no vacía ni '.  .')
+          AND TRIM(f_esc) != ''
+          AND TRIM(f_esc) NOT LIKE '.%%'
+        GROUP BY lot_esc, cod_men_pad, f_esc, no_entidad, mot_esc, orden
         ORDER BY lot_esc, cod_men_pad, orden
     """, (LOT_ESC_INICIO,))
     rows = cur.fetchall()
@@ -152,9 +151,10 @@ def insertar_en_local(conn_local, filas, mapeo, precios, personal):
     import re as _re
     rechazados = []
 
-    for lot_esc, cod_men, f_lleva, no_entidad, mot_esc, orden, total in filas:
-        # Validar formato exacto de 4 dígitos (defensa en Python además del filtro SQL)
-        if not _re.match(r'^\d{4}$', str(cod_men)) or cod_men == '0000':
+    for lot_esc, cod_men, f_esc, no_entidad, mot_esc, orden, total in filas:
+        # '0000' = pendiente sin mensajero (cod_men vacío en histo → LPAD → '0000')
+        # Rechazar solo si no es exactamente 4 dígitos
+        if not _re.match(r'^\d{4}$', str(cod_men)):
             rechazados.append(f"{lot_esc}/{cod_men}")
             continue
 
@@ -179,7 +179,7 @@ def insertar_en_local(conn_local, filas, mapeo, precios, personal):
         valor_total  = valor_unit * total
 
         cur.execute(INSERT_SQL, (
-            f_lleva, cod_men, mensajero_id, lot_esc, str(orden),
+            f_esc, cod_men, mensajero_id, lot_esc, str(orden),
             mot_esc, nombre_bd, total,
             valor_unit, valor_total,
             FECHA_REGISTRO,
