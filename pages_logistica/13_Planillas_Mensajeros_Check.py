@@ -399,16 +399,16 @@ try:
                 if conn_bw:
                     try:
                         cur_bw = conn_bw.cursor(dictionary=True)
-                        # En histo el número de planilla está en la columna 'planilla' (no lot_esc)
+                        # Busca por planilla O lot_esc para incluir registros pendientes
                         cur_bw.execute("""
                             SELECT
                                 COALESCE(NULLIF(TRIM(ciudad1), ''), 'Sin ciudad') AS ciudad,
                                 COUNT(*) AS seriales
                             FROM histo
-                            WHERE planilla = %s AND cod_men = %s
+                            WHERE (planilla = %s OR lot_esc = %s) AND cod_men = %s
                             GROUP BY ciudad
                             ORDER BY seriales DESC
-                        """, (lot_esc_planilla, cod_men_planilla))
+                        """, (lot_esc_planilla, lot_esc_planilla, cod_men_planilla))
                         rows_bw = cur_bw.fetchall()
                         cur_bw.close()
                         conn_bw.close()
@@ -514,9 +514,10 @@ try:
                                                 COALESCE(NULLIF(TRIM(ciudad1), ''), 'Sin ciudad') AS ciudad,
                                                 COUNT(*) AS cnt
                                             FROM histo
-                                            WHERE planilla = %s AND cod_men = %s AND orden = %s
+                                            WHERE (planilla = %s OR lot_esc = %s)
+                                              AND cod_men = %s AND orden = %s
                                             GROUP BY ciudad
-                                        """, (lot_esc_planilla, cod_men_planilla, orden_gm))
+                                        """, (lot_esc_planilla, lot_esc_planilla, cod_men_planilla, orden_gm))
                                         ciudad_rows = cur_bw2.fetchall()
                                         cur_bw2.close()
 
