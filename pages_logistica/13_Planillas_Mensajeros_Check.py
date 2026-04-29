@@ -524,22 +524,23 @@ try:
                                         total_ser = int(gm_row['cantidad_seriales'])
 
                                         if ciudad_rows:
-                                            # Calcular valor: cada ciudad aporta según su tipo (local/nacional)
-                                            nuevo_valor = 0.0
+                                            # Valor total de la orden según ciudades
+                                            total_histo_orden = sum(cr['cnt'] for cr in ciudad_rows)
+                                            valor_orden = 0.0
                                             for cr in ciudad_rows:
                                                 t = tipo_map.get(cr['ciudad'], 'nacional')
                                                 p = precio_local_edit if t == 'local' else precio_nac_edit
-                                                nuevo_valor += cr['cnt'] * p
+                                                valor_orden += cr['cnt'] * p
+                                            # Precio promedio por serial de la orden; cada gestión
+                                            # recibe ese mismo precio y su valor proporcional a sus seriales.
+                                            precio_unit = valor_orden / total_histo_orden if total_histo_orden > 0 else 0.0
+                                            nuevo_valor = precio_unit * total_ser
                                         else:
-                                            # Sin filas por orden en histo: distribuir total_val proporcional
-                                            # al peso de este registro dentro de todos los gestiones.
-                                            # Usar la suma de gestiones (no histo) para evitar que total_seriales
-                                            # incorrecto en la BD multiplique el valor de toda la planilla.
+                                            # Sin datos en histo: distribuir el total de la planilla
+                                            # proporcional al peso de esta gestión.
                                             prop_reg = total_ser / _total_gm_seriales if _total_gm_seriales > 0 else 0.0
                                             nuevo_valor = prop_reg * total_val
-
-                                        # precio_unitario = promedio ponderado
-                                        precio_unit = nuevo_valor / total_ser if total_ser > 0 else 0.0
+                                            precio_unit = nuevo_valor / total_ser if total_ser > 0 else 0.0
 
                                     except Exception as e_ord:
                                         # La columna 'orden' no existe en histo u otro error de SQL.
