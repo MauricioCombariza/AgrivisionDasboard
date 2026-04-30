@@ -532,13 +532,15 @@ try:
                             # 2. Distribuir total_val (calculado desde histo+clasificación de ciudades)
                             #    de forma proporcional entre las gestiones de la planilla.
                             #
-                            #    NOTA: gestiones_mensajero puede tener múltiples filas para el mismo
-                            #    serial (una por tipo_gestion: Entrega, Lleva Ciudad, Cerrado…),
-                            #    lo que hace que la suma de total_seriales en gestiones sea mayor que
-                            #    los seriales únicos en histo.  Distribuir por orden consultando histo
-                            #    causaría sobre-conteo (~2×).  La distribución proporcional garantiza
-                            #    que la suma de los valores en BD sea exactamente igual a total_val.
-                            _total_gm_seriales = df_busq['cantidad_seriales'].astype(int).sum()
+                            #    gestiones_mensajero infla el conteo (~2×) porque el mismo serial
+                            #    aparece en múltiples tipo_gestion.  La distribución proporcional
+                            #    garantiza que la suma de valor_total en BD sea exactamente total_val.
+                            #
+                            #    valor_unitario se calcula como total_val / seriales_histo (no sobre
+                            #    gestiones) para que refleje la tarifa real del courier ($990, no $498).
+                            _total_gm_seriales    = df_busq['cantidad_seriales'].astype(int).sum()
+                            _total_histo_seriales = total_loc + total_nac
+                            _precio_unit_histo    = total_val / _total_histo_seriales if _total_histo_seriales > 0 else 0.0
 
                             for _, gm_row in df_busq.iterrows():
                                 gestion_id = int(gm_row['id'])
@@ -546,7 +548,7 @@ try:
 
                                 prop_reg    = total_ser / _total_gm_seriales if _total_gm_seriales > 0 else 0.0
                                 nuevo_valor = prop_reg * total_val
-                                precio_unit = nuevo_valor / total_ser if total_ser > 0 else 0.0
+                                precio_unit = _precio_unit_histo  # tarifa real desde histo, no inflada por gestiones
 
                                 cursor_upd.execute("""
                                     UPDATE gestiones_mensajero
