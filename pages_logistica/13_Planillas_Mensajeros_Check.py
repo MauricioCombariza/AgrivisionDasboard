@@ -195,6 +195,48 @@ try:
             precio_local_busq   = float(df_busq['precio_local'].iloc[0]   or 0) if not df_busq.empty else 0.0
             precio_nacional_busq = float(df_busq['precio_nacional'].iloc[0] or 0) if not df_busq.empty else 0.0
 
+            # Para courier_externo: contar seriales únicos desde histo (fuente autorizada).
+            # gestiones_mensajero infla el conteo porque registra el mismo serial
+            # en múltiples tipo_gestion (Entrega, Lleva Ciudad, Cerrado…).
+            _seriales_histo_hdr = None
+            _valor_histo_hdr    = None
+            if es_courier_externo_busq:
+                _cod_men_hdr = str(df_busq['cod_mensajero'].iloc[0])
+                _conn_bw_hdr = _conectar_bases_web()
+                if _conn_bw_hdr:
+                    try:
+                        _cur_hdr = _conn_bw_hdr.cursor(dictionary=True)
+                        # Total seriales únicos
+                        _cur_hdr.execute("""
+                            SELECT COUNT(*) AS cnt FROM histo
+                            WHERE (planilla = %s OR lot_esc = %s) AND cod_men = %s
+                        """, (num_planilla, num_planilla, _cod_men_hdr))
+                        _r = _cur_hdr.fetchone()
+                        _seriales_histo_hdr = int(_r['cnt']) if _r else None
+
+                        # Valor usando clasificaciones guardadas en ciudad_tipo
+                        _cur_hdr.execute("""
+                            SELECT
+                                COALESCE(NULLIF(TRIM(h.ciudad1),''),'Sin ciudad') AS ciudad,
+                                COUNT(*) AS cnt,
+                                COALESCE(ct.tipo, 'nacional') AS tipo
+                            FROM histo h
+                            LEFT JOIN ciudad_tipo ct
+                              ON TRIM(h.ciudad1) = ct.ciudad
+                            WHERE (h.planilla = %s OR h.lot_esc = %s) AND h.cod_men = %s
+                            GROUP BY ciudad, tipo
+                        """, (num_planilla, num_planilla, _cod_men_hdr))
+                        _ciudad_rows_hdr = _cur_hdr.fetchall()
+                        _cur_hdr.close()
+                        _conn_bw_hdr.close()
+                        if _ciudad_rows_hdr and precio_local_busq > 0 and precio_nacional_busq > 0:
+                            _valor_histo_hdr = sum(
+                                r['cnt'] * (precio_local_busq if r['tipo'] == 'local' else precio_nacional_busq)
+                                for r in _ciudad_rows_hdr
+                            )
+                    except Exception:
+                        pass
+
             # Obtener lista de mensajeros para el selector
             cursor.execute("""
                 SELECT codigo, nombre_completo
@@ -218,12 +260,17 @@ try:
             col_m1, col_m2, col_m3 = st.columns([1.5, 1.5, 1])
             with col_m1:
                 st.write(f"**Mensajero(s) actual(es):** {', '.join(mensajeros_en_planilla)}")
-                _valor_label = f"${total_valor_planilla:,.0f}"
                 if es_courier_externo_busq:
-                    # Para couriers externos el valor en BD puede estar desactualizado;
-                    # el total correcto se recalcula abajo según clasificación local/nacional.
-                    _valor_label += " _(pendiente recalcular)_"
-                st.write(f"**Registros:** {len(registros)} | **Seriales:** {total_seriales_planilla:,} | **Valor:** {_valor_label}")
+                    # Usar histo como fuente autorizada de seriales y valor
+                    _ser_label = f"{_seriales_histo_hdr:,}" if _seriales_histo_hdr is not None else f"{total_seriales_planilla:,} ⚠️"
+                    if _valor_histo_hdr is not None:
+                        _valor_label = f"${_valor_histo_hdr:,.0f}"
+                    else:
+                        _valor_label = f"${total_valor_planilla:,.0f} _(pendiente recalcular)_"
+                else:
+                    _ser_label   = f"{total_seriales_planilla:,}"
+                    _valor_label = f"${total_valor_planilla:,.0f}"
+                st.write(f"**Registros:** {len(registros)} | **Seriales:** {_ser_label} | **Valor:** {_valor_label}")
 
             with col_m2:
                 nuevo_men_planilla = st.selectbox(
