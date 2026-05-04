@@ -430,9 +430,12 @@ try:
                     )
 
                 # ── Inputs de tarifa ─────────────────────────────────────────
-                # La clave incluye cod_mensajero para que Streamlit inicialice
-                # el widget con la tarifa correcta al cambiar de courier.
-                _cod_men_key = str(df_busq['cod_mensajero'].iloc[0]) if not df_busq.empty else "x"
+                # La clave incluye cod_mensajero y los valores de personal para que
+                # Streamlit reinicialice el widget cuando cambie la tarifa en BD.
+                _cod_men_key = (
+                    f"{df_busq['cod_mensajero'].iloc[0]}"
+                    f"_{int(_precio_local_personal)}_{int(_precio_nac_personal)}"
+                ) if not df_busq.empty else "x"
                 col_tar1, col_tar2 = st.columns(2)
                 with col_tar1:
                     precio_local_edit = st.number_input(
