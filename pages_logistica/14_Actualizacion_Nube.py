@@ -67,6 +67,13 @@ HISTO_LIMIT = 300_000
 # Couriers internos de Carvajal que se excluyen de las órdenes (no son clientes externos).
 COURIERS_EXCLUIDOS = {"lecta", "prindel"}
 
+# Códigos de courier externo — su fuente de verdad es bases_web.histo (campo planilla),
+# NO el lot_esc del escáner. En Paso 5 se sincronizan directamente desde histo.
+COURIER_EXTERNOS_SET = {
+    '1001', '1003', '1006', '1010', '1011',
+    '1016', '1017', '1018', '1019', '1020', '1027', '1030',
+}
+
 # ---------------------------------------------------------------------------
 # UI - TÍTULO
 # ---------------------------------------------------------------------------
@@ -1001,6 +1008,13 @@ with st.expander(
                     # Descartar planillas revisadas antes de cualquier query
                     df_work = df_work[~df_work["_lot"].isin(planillas_revisadas)]
 
+                    # Courier externos se sincronizan directamente desde histo en el
+                    # bloque dedicado más abajo — excluirlos aquí evita que lot_esc
+                    # (escáner) pise la planilla real de Servilla en gestiones_mensajero.
+                    df_work = df_work[
+                        ~df_work["cod_men"].astype(str).str.strip().isin(COURIER_EXTERNOS_SET)
+                    ].copy()
+
                     status.caption("Cargando registros existentes en memoria…")
                     barra.progress(0.1)
 
@@ -1116,6 +1130,131 @@ with st.expander(
                             )
                         actualizados = len(to_update)
 
+                    # ── Sync courier_externos desde bases_web.histo ───────────────
+                    # La fuente de verdad para planilla y total_seriales es histo.
+                    # Se eliminan registros huérfanos (no en histo) y se insertan/
+                    # actualizan los reales. Planillas revisadas y candados quedan
+                    # intactos.
+                    barra.progress(0.85)
+                    status.caption("Sincronizando courier_externos desde histo…")
+                    ext_insertados = ext_actualizados = ext_borrados = 0
+                    try:
+                        _conn_bw_p5 = mysql.connector.connect(
+                            host=_BW_HOST, port=_BW_PORT,
+                            user=_BW_USER, password=_BW_PASS,
+                            database=_BW_NAME, connect_timeout=15,
+                        )
+                        _cur_bw_p5 = _conn_bw_p5.cursor(dictionary=True)
+                        _ph_ext   = ','.join(['%s'] * len(COURIER_EXTERNOS_SET))
+                        _ext_list = list(COURIER_EXTERNOS_SET)
+                        _year     = date_cls.today().year
+
+                        # Grupos (cod_men, planilla, cliente) del año en curso en histo
+                        _cur_bw_p5.execute(f"""
+                            SELECT
+                                cod_men,
+                                COALESCE(NULLIF(TRIM(planilla), ''), 'SIN NUMERO') AS planilla,
+                                COALESCE(NULLIF(TRIM(no_entidad), ''), 'Sin Cliente') AS no_entidad,
+                                MIN(f_emi) AS fecha_min,
+                                COUNT(serial) AS total_seriales
+                            FROM histo
+                            WHERE cod_men IN ({_ph_ext})
+                              AND f_emi LIKE %s
+                            GROUP BY cod_men, planilla, no_entidad
+                        """, _ext_list + [f'{_year}.%%'])
+                        _histo_ext = _cur_bw_p5.fetchall()
+                        _cur_bw_p5.close()
+                        _conn_bw_p5.close()
+
+                        # Normalizar nombres de cliente con el mapeo ya cargado en BD
+                        for _r in _histo_ext:
+                            _r['no_entidad'] = mapeos_cli.get(
+                                str(_r['no_entidad']).upper().strip(), _r['no_entidad']
+                            )
+
+                        # Keys válidas en histo: (cod_men, planilla, cliente)
+                        _histo_keys = {
+                            (r['cod_men'], r['planilla'], r['no_entidad'])
+                            for r in _histo_ext
+                        }
+
+                        # Registros actuales de courier_externos en gestiones_mensajero
+                        # filtrados al año en curso para no tocar años anteriores.
+                        cur_op.execute(f"""
+                            SELECT id, cod_mensajero, lot_esc,
+                                   editado_manualmente, cliente, liquidado
+                            FROM gestiones_mensajero
+                            WHERE cod_mensajero IN ({_ph_ext})
+                              AND fecha_escaner LIKE %s
+                        """, _ext_list + [f'{_year}.%%'])
+                        _gm_ext = cur_op.fetchall()
+
+                        # Eliminar registros huérfanos: no existen en histo,
+                        # no están revisados, no tienen candado y no están liquidados.
+                        _ids_borrar = [
+                            r[0] for r in _gm_ext
+                            if (str(r[1]), str(r[2]), str(r[4])) not in _histo_keys
+                            and str(r[2]) not in planillas_revisadas
+                            and not r[3]   # editado_manualmente = 0
+                            and not r[5]   # liquidado = 0
+                        ]
+                        if _ids_borrar:
+                            _ph_del = ','.join(['%s'] * len(_ids_borrar))
+                            cur_op.execute(
+                                f"DELETE FROM gestiones_mensajero WHERE id IN ({_ph_del})",
+                                _ids_borrar,
+                            )
+                            ext_borrados = len(_ids_borrar)
+
+                        # Dict de existentes por (cod_men, lot_esc, cliente)
+                        _gm_ext_dict = {
+                            (str(r[1]), str(r[2]), str(r[4])): {
+                                'id': r[0], 'editado': r[3]
+                            }
+                            for r in _gm_ext
+                        }
+
+                        # Insertar / actualizar desde histo
+                        for _r in _histo_ext:
+                            _planilla = str(_r['planilla'])
+                            if _planilla in planillas_revisadas:
+                                continue
+                            _cod  = str(_r['cod_men'])
+                            _cli  = str(_r['no_entidad'])
+                            _key  = (_cod, _planilla, _cli)
+                            _tot  = int(_r['total_seriales'])
+                            _m_id = personal_bd.get(_cod)
+                            _fesc = str(_r['fecha_min']).replace('.', '-')
+
+                            if _key in _gm_ext_dict:
+                                if not _gm_ext_dict[_key]['editado']:
+                                    cur_op.execute("""
+                                        UPDATE gestiones_mensajero
+                                        SET total_seriales = %s,
+                                            cliente = %s,
+                                            valor_total = (%s * valor_unitario)
+                                        WHERE id = %s
+                                    """, (_tot, _cli, _tot, _gm_ext_dict[_key]['id']))
+                                    ext_actualizados += 1
+                            else:
+                                cur_op.execute("""
+                                    INSERT INTO gestiones_mensajero
+                                    (fecha_escaner, cod_mensajero, mensajero_id,
+                                     lot_esc, orden, tipo_gestion, cliente,
+                                     total_seriales, valor_unitario, valor_total,
+                                     fecha_registro, editado_manualmente, liquidado)
+                                    VALUES (%s, %s, %s, %s, NULL,
+                                            'Courier Externo', %s,
+                                            %s, 0.00, 0.00, %s, 0, 0)
+                                """, (
+                                    _fesc, _cod, _m_id, _planilla,
+                                    _cli, _tot, date_cls.today(),
+                                ))
+                                ext_insertados += 1
+
+                    except Exception as _exc_ext:
+                        st.warning(f"⚠️ Sincronización courier_externos falló: {_exc_ext}")
+
                     conn_cl.commit()
                     barra.progress(1.0)
                     status.empty()
@@ -1124,6 +1263,13 @@ with st.expander(
                         f"✅ {insertados:,} insertados | "
                         f"{actualizados:,} actualizados en la nube"
                     )
+                    if ext_insertados or ext_actualizados or ext_borrados:
+                        st.info(
+                            f"Courier externos — "
+                            f"{ext_insertados} insertados | "
+                            f"{ext_actualizados} actualizados | "
+                            f"{ext_borrados} eliminados"
+                        )
                     if errores:
                         with st.expander(f"Ver {len(errores)} errores"):
                             for err in errores[:30]:
