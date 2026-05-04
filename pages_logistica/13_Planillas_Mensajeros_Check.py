@@ -397,18 +397,21 @@ try:
                 st.markdown("##### 🏙️ Ajuste de Precio por Ciudad (Courier Externo)")
 
                 # ── Tarifas del mensajero ────────────────────────────────────
+                # La clave incluye cod_mensajero para que Streamlit inicialice
+                # el widget con la tarifa correcta al cambiar de courier.
+                _cod_men_key = str(df_busq['cod_mensajero'].iloc[0]) if not df_busq.empty else "x"
                 col_tar1, col_tar2 = st.columns(2)
                 with col_tar1:
                     precio_local_edit = st.number_input(
                         "Tarifa Local ($/serial)",
                         min_value=0.0, value=precio_local_busq, step=500.0, format="%.0f",
-                        key="tar_local_busq"
+                        key=f"tar_local_busq_{_cod_men_key}"
                     )
                 with col_tar2:
                     precio_nac_edit = st.number_input(
                         "Tarifa Nacional ($/serial)",
                         min_value=0.0, value=precio_nacional_busq, step=500.0, format="%.0f",
-                        key="tar_nac_busq"
+                        key=f"tar_nac_busq_{_cod_men_key}"
                     )
 
                 if precio_local_edit != precio_local_busq or precio_nac_edit != precio_nacional_busq:
@@ -494,7 +497,7 @@ try:
                         },
                         use_container_width=True,
                         hide_index=True,
-                        key="editor_ciudades_busq"
+                        key=f"editor_ciudades_busq_{num_planilla}_{_cod_men_key}"
                     )
 
                     # Calcular resumen local / nacional con las tarifas actuales
