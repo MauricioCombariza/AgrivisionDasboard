@@ -192,8 +192,26 @@ try:
             # Detectar si el mensajero es courier_externo para mostrar vista por ciudad
             _tipo_personal = df_busq['tipo_personal'].iloc[0] if not df_busq.empty else None
             es_courier_externo_busq = (_tipo_personal == 'courier_externo')
-            precio_local_busq   = float(df_busq['precio_local'].iloc[0]   or 0) if not df_busq.empty else 0.0
-            precio_nacional_busq = float(df_busq['precio_nacional'].iloc[0] or 0) if not df_busq.empty else 0.0
+
+            # Valor guardado en personal (None → 0 si no está configurado)
+            _precio_local_personal  = float(df_busq['precio_local'].iloc[0]  or 0) if not df_busq.empty else 0.0
+            _precio_nac_personal    = float(df_busq['precio_nacional'].iloc[0] or 0) if not df_busq.empty else 0.0
+            # True solo cuando personal.precio_local > 0 (fue guardado explícitamente)
+            _tarifa_fija_busq       = _precio_local_personal > 0
+
+            precio_local_busq    = _precio_local_personal
+            precio_nacional_busq = _precio_nac_personal
+
+            # Si personal.precio_local no está configurado (NULL → 0), mostrar el
+            # valor_unitario promedio de la planilla como referencia visual.
+            # NO se guarda automáticamente; el usuario debe pulsar "Guardar tarifas".
+            if precio_local_busq == 0 and es_courier_externo_busq and not df_busq.empty:
+                _precios_ref = df_busq['precio'].astype(float)
+                _precios_ref = _precios_ref[_precios_ref > 0]
+                if not _precios_ref.empty:
+                    _precio_ref          = round(_precios_ref.mean(), 0)
+                    precio_local_busq    = _precio_ref
+                    precio_nacional_busq = _precio_ref
 
             # Para courier_externo: contar seriales únicos desde histo (fuente autorizada).
             # gestiones_mensajero infla el conteo porque registra el mismo serial
@@ -399,7 +417,20 @@ try:
                 # =====================================================
                 st.markdown("##### 🏙️ Ajuste de Precio por Ciudad (Courier Externo)")
 
-                # ── Tarifas del mensajero ────────────────────────────────────
+                # ── Estado de la tarifa ──────────────────────────────────────
+                if _tarifa_fija_busq:
+                    st.success(
+                        f"🔒 Tarifa guardada en BD — Local: **${_precio_local_personal:,.0f}** | "
+                        f"Nacional: **${_precio_nac_personal:,.0f}** — "
+                        "Solo cambia si guardas un nuevo valor manualmente."
+                    )
+                else:
+                    st.warning(
+                        "⚠️ Tarifa **no guardada** en BD — mostrando referencia de planilla. "
+                        "Ajusta los valores y pulsa **💾 Guardar tarifas** para fijarlos."
+                    )
+
+                # ── Inputs de tarifa ─────────────────────────────────────────
                 # La clave incluye cod_mensajero para que Streamlit inicialice
                 # el widget con la tarifa correcta al cambiar de courier.
                 _cod_men_key = str(df_busq['cod_mensajero'].iloc[0]) if not df_busq.empty else "x"
@@ -417,7 +448,14 @@ try:
                         key=f"tar_nac_busq_{_cod_men_key}"
                     )
 
-                if precio_local_edit != precio_local_busq or precio_nac_edit != precio_nacional_busq:
+                # Mostrar botón guardar cuando:
+                #   a) La tarifa NO está fijada en BD (fallback) → siempre visible
+                #   b) La tarifa SÍ está fijada pero el usuario cambió el valor
+                _tarifa_modificada = (
+                    precio_local_edit != _precio_local_personal
+                    or precio_nac_edit != _precio_nac_personal
+                )
+                if not _tarifa_fija_busq or _tarifa_modificada:
                     if st.button("💾 Guardar tarifas del mensajero", key="btn_save_tarifas_busq"):
                         try:
                             _cur_tar = conn.cursor()
@@ -427,7 +465,10 @@ try:
                             )
                             conn.commit()
                             _cur_tar.close()
-                            st.success("Tarifas guardadas")
+                            st.success(
+                                f"✅ Tarifas guardadas — Local: ${precio_local_edit:,.0f} | "
+                                f"Nacional: ${precio_nac_edit:,.0f}"
+                            )
                             st.rerun()
                         except Exception as e:
                             conn.rollback()
