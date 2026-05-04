@@ -129,8 +129,8 @@ try:
                     gm.editado_manualmente,
                     p.nombre_completo as nombre_mensajero,
                     p.tipo_personal,
-                    p.precio_local,
-                    p.precio_nacional
+                    p.tarifa_entrega_local   AS precio_local,
+                    p.tarifa_entrega_nacional AS precio_nacional
                 FROM gestiones_mensajero gm
                 LEFT JOIN personal p ON gm.cod_mensajero = p.codigo
                 WHERE gm.lot_esc = %s
@@ -193,18 +193,17 @@ try:
             _tipo_personal = df_busq['tipo_personal'].iloc[0] if not df_busq.empty else None
             es_courier_externo_busq = (_tipo_personal == 'courier_externo')
 
-            # Valor guardado en personal (None → 0 si no está configurado)
+            # Tarifa configurada en personal (formulario 2_Personal)
             _precio_local_personal  = float(df_busq['precio_local'].iloc[0]  or 0) if not df_busq.empty else 0.0
             _precio_nac_personal    = float(df_busq['precio_nacional'].iloc[0] or 0) if not df_busq.empty else 0.0
-            # True solo cuando personal.precio_local > 0 (fue guardado explícitamente)
+            # True cuando el perfil del mensajero tiene tarifa configurada
             _tarifa_fija_busq       = _precio_local_personal > 0
 
             precio_local_busq    = _precio_local_personal
             precio_nacional_busq = _precio_nac_personal
 
-            # Si personal.precio_local no está configurado (NULL → 0), mostrar el
-            # valor_unitario promedio de la planilla como referencia visual.
-            # NO se guarda automáticamente; el usuario debe pulsar "Guardar tarifas".
+            # Si personal no tiene tarifa configurada, usar valor_unitario promedio
+            # de gestiones_mensajero como referencia visual solamente.
             if precio_local_busq == 0 and es_courier_externo_busq and not df_busq.empty:
                 _precios_ref = df_busq['precio'].astype(float)
                 _precios_ref = _precios_ref[_precios_ref > 0]
@@ -420,14 +419,14 @@ try:
                 # ── Estado de la tarifa ──────────────────────────────────────
                 if _tarifa_fija_busq:
                     st.success(
-                        f"🔒 Tarifa guardada en BD — Local: **${_precio_local_personal:,.0f}** | "
+                        f"🔒 Tarifa desde Personal — Local: **${_precio_local_personal:,.0f}** | "
                         f"Nacional: **${_precio_nac_personal:,.0f}** — "
-                        "Solo cambia si guardas un nuevo valor manualmente."
+                        "Para cambiarla edita el perfil en la página Personal."
                     )
                 else:
                     st.warning(
-                        "⚠️ Tarifa **no guardada** en BD — mostrando referencia de planilla. "
-                        "Ajusta los valores y pulsa **💾 Guardar tarifas** para fijarlos."
+                        "⚠️ Sin tarifa en Personal — mostrando referencia de planilla. "
+                        "Configura la tarifa en Personal o ajusta los valores y aplícalos abajo."
                     )
 
                 # ── Inputs de tarifa ─────────────────────────────────────────
@@ -448,26 +447,31 @@ try:
                         key=f"tar_nac_busq_{_cod_men_key}"
                     )
 
-                # Mostrar botón guardar cuando:
-                #   a) La tarifa NO está fijada en BD (fallback) → siempre visible
-                #   b) La tarifa SÍ está fijada pero el usuario cambió el valor
+                # Botón para aplicar tarifa plana a todos los registros de la planilla
+                # (sin distribución por ciudad — usa precio_local_edit para todos)
                 _tarifa_modificada = (
                     precio_local_edit != _precio_local_personal
                     or precio_nac_edit != _precio_nac_personal
                 )
                 if not _tarifa_fija_busq or _tarifa_modificada:
-                    if st.button("💾 Guardar tarifas del mensajero", key="btn_save_tarifas_busq"):
+                    if st.button("💾 Aplicar tarifa a esta planilla", key="btn_save_tarifas_busq"):
                         try:
                             _cur_tar = conn.cursor()
-                            _cur_tar.execute(
-                                "UPDATE personal SET precio_local=%s, precio_nacional=%s WHERE codigo=%s",
-                                (precio_local_edit, precio_nac_edit, df_busq['cod_mensajero'].iloc[0])
-                            )
+                            _total_gm_ser = df_busq['cantidad_seriales'].astype(int).sum()
+                            for _, _gm in df_busq.iterrows():
+                                _ser   = int(_gm['cantidad_seriales'])
+                                _val   = _ser * precio_local_edit
+                                _cur_tar.execute(
+                                    """UPDATE gestiones_mensajero
+                                       SET valor_unitario=%s, valor_total=%s, editado_manualmente=1
+                                       WHERE id=%s""",
+                                    (precio_local_edit, _val, int(_gm['id']))
+                                )
                             conn.commit()
                             _cur_tar.close()
                             st.success(
-                                f"✅ Tarifas guardadas — Local: ${precio_local_edit:,.0f} | "
-                                f"Nacional: ${precio_nac_edit:,.0f}"
+                                f"✅ Planilla actualizada — Tarifa: ${precio_local_edit:,.0f}/serial | "
+                                f"Total: ${sum(int(r['cantidad_seriales']) * precio_local_edit for _, r in df_busq.iterrows()):,.0f}"
                             )
                             st.rerun()
                         except Exception as e:
@@ -625,8 +629,8 @@ try:
                                     gm.editado_manualmente,
                                     p.nombre_completo as nombre_mensajero,
                                     p.tipo_personal,
-                                    p.precio_local,
-                                    p.precio_nacional
+                                    p.tarifa_entrega_local   AS precio_local,
+                                    p.tarifa_entrega_nacional AS precio_nacional
                                 FROM gestiones_mensajero gm
                                 LEFT JOIN personal p ON gm.cod_mensajero = p.codigo
                                 WHERE gm.lot_esc = %s
