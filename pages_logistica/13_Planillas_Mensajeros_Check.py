@@ -195,6 +195,17 @@ try:
             precio_local_busq   = float(df_busq['precio_local'].iloc[0]   or 0) if not df_busq.empty else 0.0
             precio_nacional_busq = float(df_busq['precio_nacional'].iloc[0] or 0) if not df_busq.empty else 0.0
 
+            # Si personal.precio_local no está configurado (NULL → 0), usar el
+            # valor_unitario promedio de los registros actuales de la planilla como
+            # referencia para que el usuario vea el precio ya aplicado, no un 0.
+            if precio_local_busq == 0 and es_courier_externo_busq and not df_busq.empty:
+                _precios_ref = df_busq['precio'].astype(float)
+                _precios_ref = _precios_ref[_precios_ref > 0]
+                if not _precios_ref.empty:
+                    _precio_ref       = round(_precios_ref.mean(), 0)
+                    precio_local_busq    = _precio_ref
+                    precio_nacional_busq = _precio_ref
+
             # Para courier_externo: contar seriales únicos desde histo (fuente autorizada).
             # gestiones_mensajero infla el conteo porque registra el mismo serial
             # en múltiples tipo_gestion (Entrega, Lleva Ciudad, Cerrado…).
