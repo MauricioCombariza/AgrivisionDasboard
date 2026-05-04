@@ -201,21 +201,24 @@ try:
             _seriales_histo_hdr = None
             _valor_histo_hdr    = None
             if es_courier_externo_busq:
-                _cod_men_hdr = str(df_busq['cod_mensajero'].iloc[0])
+                # Todos los couriers de la planilla — una planilla puede tener
+                # registros de varios cod_men (ej. 1001 y 1003 comparten 351300).
+                _cod_men_list = [str(c) for c in df_busq['cod_mensajero'].unique()]
+                _ph_men = ','.join(['%s'] * len(_cod_men_list))
                 _conn_bw_hdr = _conectar_bases_web()
                 if _conn_bw_hdr:
                     try:
                         _cur_hdr = _conn_bw_hdr.cursor(dictionary=True)
-                        # Total seriales únicos
-                        _cur_hdr.execute("""
+                        # Total seriales de TODOS los couriers de la planilla
+                        _cur_hdr.execute(f"""
                             SELECT COUNT(*) AS cnt FROM histo
-                            WHERE (planilla = %s OR lot_esc = %s) AND cod_men = %s
-                        """, (num_planilla, num_planilla, _cod_men_hdr))
+                            WHERE (planilla = %s OR lot_esc = %s) AND cod_men IN ({_ph_men})
+                        """, [num_planilla, num_planilla] + _cod_men_list)
                         _r = _cur_hdr.fetchone()
                         _seriales_histo_hdr = int(_r['cnt']) if _r else None
 
                         # Valor usando clasificaciones guardadas en ciudad_tipo
-                        _cur_hdr.execute("""
+                        _cur_hdr.execute(f"""
                             SELECT
                                 COALESCE(NULLIF(TRIM(h.ciudad1),''),'Sin ciudad') AS ciudad,
                                 COUNT(*) AS cnt,
@@ -223,9 +226,9 @@ try:
                             FROM histo h
                             LEFT JOIN ciudad_tipo ct
                               ON TRIM(h.ciudad1) = ct.ciudad
-                            WHERE (h.planilla = %s OR h.lot_esc = %s) AND h.cod_men = %s
+                            WHERE (h.planilla = %s OR h.lot_esc = %s) AND h.cod_men IN ({_ph_men})
                             GROUP BY ciudad, tipo
-                        """, (num_planilla, num_planilla, _cod_men_hdr))
+                        """, [num_planilla, num_planilla] + _cod_men_list)
                         _ciudad_rows_hdr = _cur_hdr.fetchall()
                         _cur_hdr.close()
                         _conn_bw_hdr.close()
@@ -440,8 +443,9 @@ try:
                     ciudad_tipo_guardado = {}
 
                 # ── Consultar histo: seriales de la planilla agrupados por ciudad1 ──
-                cod_men_planilla = str(df_busq['cod_mensajero'].iloc[0])
+                # Reutiliza _cod_men_list ya calculado en el bloque del header.
                 lot_esc_planilla = str(num_planilla)
+                _ph_men_city = ','.join(['%s'] * len(_cod_men_list))
 
                 conn_bw = _conectar_bases_web()
                 df_ciudades = pd.DataFrame()
@@ -449,16 +453,16 @@ try:
                 if conn_bw:
                     try:
                         cur_bw = conn_bw.cursor(dictionary=True)
-                        # Busca por planilla O lot_esc para incluir registros pendientes
-                        cur_bw.execute("""
+                        # Todos los couriers de la planilla para no perder seriales
+                        cur_bw.execute(f"""
                             SELECT
                                 COALESCE(NULLIF(TRIM(ciudad1), ''), 'Sin ciudad') AS ciudad,
                                 COUNT(*) AS seriales
                             FROM histo
-                            WHERE (planilla = %s OR lot_esc = %s) AND cod_men = %s
+                            WHERE (planilla = %s OR lot_esc = %s) AND cod_men IN ({_ph_men_city})
                             GROUP BY ciudad
                             ORDER BY seriales DESC
-                        """, (lot_esc_planilla, lot_esc_planilla, cod_men_planilla))
+                        """, [lot_esc_planilla, lot_esc_planilla] + _cod_men_list)
                         rows_bw = cur_bw.fetchall()
                         cur_bw.close()
                         conn_bw.close()
