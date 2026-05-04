@@ -33,10 +33,9 @@ TABLAS_SYNC = {
     "logistica": ["gestiones_mensajero", "ordenes"],
 }
 
-# Tablas que se descargan del VPS a local (la nube es fuente de verdad)
-TABLAS_BAJAR = {
-    "logistica": ["personal"],
-}
+# personal siempre fluye LOCAL → VPS (nunca al revés) para preservar
+# tarifa_entrega_local/nacional configuradas en el formulario de Personal.
+TABLAS_BAJAR = {}
 
 # ── Estado del VPS ────────────────────────────────────────────────────────────
 def verificar_conexion_vps():
@@ -221,16 +220,8 @@ with col_j1:
             st.code(salida, language=None)
 
 with col_j2:
-    if st.button("⬇️ Bajar personal (Julia)", key="julia_bajar"):
-        with st.spinner("Ejecutando Julia..."):
-            ok, salida = _run_julia("bajar")
-        hora = datetime.now().strftime("%H:%M:%S")
-        if ok:
-            st.success(f"✅ Completado a las {hora}")
-        else:
-            st.error("❌ Terminó con errores")
-        with st.expander("Salida del script", expanded=True):
-            st.code(salida, language=None)
+    st.button("⬇️ Bajar personal (Julia)", key="julia_bajar", disabled=True,
+              help="Deshabilitado: personal siempre fluye LOCAL → VPS para preservar las tarifas configuradas.")
 
 st.divider()
 
@@ -289,35 +280,7 @@ with st.expander("🐍 Versión Python (fallback)", expanded=False):
 
     st.divider()
     st.markdown("**Descargar del VPS a local**")
-
-    if st.button("⬇️ Descargar personal del VPS", type="secondary", key="py_bajar"):
-        log2 = []
-        try:
-            with st.spinner("Conectando al VPS..."):
-                client2 = paramiko.SSHClient()
-                client2.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                client2.connect(VPS_HOST, username=VPS_USER, key_filename=VPS_KEY, timeout=15)
-                sftp2 = client2.open_sftp()
-
-            for db, tablas in TABLAS_BAJAR.items():
-                for tabla in tablas:
-                    st.info(f"Descargando `{db}.{tabla}`...")
-                    descargar_tabla(db, tabla, client2, sftp2, log2)
-
-            sftp2.close()
-            client2.close()
-
-            hora = datetime.now().strftime("%H:%M:%S")
-            errores = [l for l in log2 if l.startswith("❌")]
-            if not errores:
-                st.success(f"✅ Descarga completada a las {hora}")
-            else:
-                st.warning("⚠️ Descarga con errores")
-        except Exception as e:
-            st.error(f"❌ Error de conexión SSH: {e}")
-            log2.append(f"❌ SSH: {e}")
-
-        if log2:
-            with st.expander("Ver detalles"):
-                for linea in log2:
-                    st.write(linea)
+    st.button(
+        "⬇️ Descargar personal del VPS", type="secondary", key="py_bajar", disabled=True,
+        help="Deshabilitado: personal siempre fluye LOCAL → VPS para preservar las tarifas configuradas."
+    )
