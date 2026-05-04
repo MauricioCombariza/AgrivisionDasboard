@@ -189,6 +189,21 @@ try:
 
             df_busq = pd.DataFrame(registros)
 
+            # Verificar si la planilla está marcada como revisada (precios bloqueados)
+            _cur_pr = conn.cursor()
+            _cur_pr.execute(
+                "SELECT fecha_revision FROM planillas_revisadas WHERE lot_esc = %s",
+                (str(num_planilla),)
+            )
+            _pr_row = _cur_pr.fetchone()
+            _cur_pr.close()
+            _planilla_marcada = _pr_row is not None
+            if _planilla_marcada:
+                st.info(
+                    f"🔒 Planilla marcada el {_pr_row[0]} — precios bloqueados. "
+                    "Los precios de planillas revisadas no se pueden modificar."
+                )
+
             # Detectar si el mensajero es courier_externo para mostrar vista por ciudad
             _tipo_personal = df_busq['tipo_personal'].iloc[0] if not df_busq.empty else None
             es_courier_externo_busq = (_tipo_personal == 'courier_externo')
@@ -457,7 +472,9 @@ try:
                     or precio_nac_edit != _precio_nac_personal
                 )
                 if not _tarifa_fija_busq or _tarifa_modificada:
-                    if st.button("💾 Aplicar tarifa a esta planilla", key="btn_save_tarifas_busq"):
+                    if st.button("💾 Aplicar tarifa a esta planilla", key="btn_save_tarifas_busq",
+                                 disabled=_planilla_marcada,
+                                 help="Planilla marcada — precios bloqueados" if _planilla_marcada else None):
                         try:
                             _cur_tar = conn.cursor()
                             _total_gm_ser = df_busq['cantidad_seriales'].astype(int).sum()
@@ -572,7 +589,10 @@ try:
                         f"**Total: ${total_val:,.0f}**"
                     )
 
-                    if st.button("💾 Aplicar clasificación y actualizar precios", type="primary", key="btn_aplicar_ciudad_busq"):
+                    if st.button("💾 Aplicar clasificación y actualizar precios", type="primary",
+                                 key="btn_aplicar_ciudad_busq",
+                                 disabled=_planilla_marcada,
+                                 help="Planilla marcada — precios bloqueados" if _planilla_marcada else None):
                         try:
                             cursor_upd = conn.cursor()
 
@@ -684,7 +704,10 @@ try:
                     st.write("")
                     st.write("")
                     if nuevo_precio_planilla != precio_promedio_planilla or len(precios_actuales) > 1:
-                        if st.button("Aplicar precio a toda la planilla", type="primary", key="btn_cambiar_precio_planilla"):
+                        if st.button("Aplicar precio a toda la planilla", type="primary",
+                                     key="btn_cambiar_precio_planilla",
+                                     disabled=_planilla_marcada,
+                                     help="Planilla marcada — precios bloqueados" if _planilla_marcada else None):
                             try:
                                 cursor_upd = conn.cursor()
                                 ids_planilla = df_busq['id'].tolist()
