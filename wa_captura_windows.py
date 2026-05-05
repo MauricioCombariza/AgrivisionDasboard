@@ -23,6 +23,7 @@ import os
 import io
 import json
 import time
+import random
 from urllib.parse import quote
 
 from selenium import webdriver
@@ -68,12 +69,25 @@ def _build_driver() -> webdriver.Chrome:
     options = Options()
     options.add_argument("--start-maximized")
     options.add_argument(f"--user-data-dir={WA_PROFILE}")
-    options.add_experimental_option("excludeSwitches", ["enable-logging"])
+    # Anti-detección: ocultar flags de automatización
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-logging", "enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
     options.add_experimental_option("detach", False)
-    return webdriver.Chrome(
+    driver = webdriver.Chrome(
         service=Service(ChromeDriverManager().install()),
         options=options,
     )
+    # Eliminar navigator.webdriver para que WA Web no detecte Selenium
+    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+        "source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    })
+    return driver
+
+
+def _pausa(min_s: float = 1.5, max_s: float = 3.5):
+    """Retardo aleatorio para simular comportamiento humano."""
+    time.sleep(random.uniform(min_s, max_s))
 
 
 def enviar_y_capturar(numero: str, mensaje: str, serial: str,
@@ -111,9 +125,11 @@ def enviar_y_capturar(numero: str, mensaje: str, serial: str,
         print("Esperando carga de WhatsApp Web…", flush=True)
         wait.until(EC.presence_of_element_located(_CHAT_INPUT))
         print("WhatsApp listo.", flush=True)
+        _pausa(2.0, 4.0)  # pausa tras carga, como si el usuario leyera el chat
 
         # ── 2. Localizar y hacer clic en el botón Enviar ─────────────────────
         send_btn = wait.until(EC.element_to_be_clickable(_SEND_BTN))
+        _pausa(1.0, 2.5)  # pausa antes de enviar, como si revisara el mensaje
         driver.execute_script("arguments[0].click();", send_btn)
         print("Mensaje enviado.", flush=True)
 
@@ -126,6 +142,8 @@ def enviar_y_capturar(numero: str, mensaje: str, serial: str,
         except Exception:
             # El check puede tardar si hay mala conexión; continuamos igual
             print("Aviso: no se detectó check de confirmación, capturando igual.", flush=True)
+
+        _pausa(2.0, 3.5)  # pausa antes de capturar, como si el usuario viera el resultado
 
         # ── 4. Captura de pantalla via Selenium ───────────────────────────────
         driver.save_screenshot(screenshot_path)

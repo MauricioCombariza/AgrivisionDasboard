@@ -18,6 +18,7 @@ import io
 import json
 import platform
 import subprocess
+import webbrowser
 
 import streamlit as st
 import pandas as pd
@@ -344,6 +345,14 @@ st.markdown(
     "envía WhatsApp con captura automática (Selenium) y sube a iMile serial por serial."
 )
 
+# ── Modo de envío ─────────────────────────────────────────────────────────────
+modo_manual = st.toggle(
+    "⚠️ Modo manual (cuenta bloqueada o sin Selenium)",
+    value=False,
+    help="Abre el link wa.me en el navegador con el mensaje pre-cargado. "
+         "Tú haces clic en Enviar desde cualquier cuenta de WhatsApp disponible.",
+)
+
 # ── Estado inicial ────────────────────────────────────────────────────────────
 for key, val in [("devol_df", None), ("devol_idx", 0)]:
     if key not in st.session_state:
@@ -498,67 +507,105 @@ if st.session_state.devol_df is not None:
         st.text_area("📝 Mensaje a enviar", mensaje, height=160, disabled=True, key=f"msg_{idx}")
 
         # ── Botones de acción ─────────────────────────────────────────────────
-        b1, b2, b3 = st.columns(3)
+        wa_link = (
+            f"https://wa.me/{fila['telefono'].lstrip('+').replace(' ', '')}"
+            f"?text={quote(mensaje)}"
+        )
 
-        with b1:
-            lbl = "✅ WA enviado y capturado" if fila["wa_capturado"] else "1️⃣ Enviar WA y Capturar"
-            if st.button(lbl, key=f"wa_{idx}",
-                         disabled=fila["wa_capturado"],
-                         width="stretch"):
-                with st.status("Enviando WhatsApp y capturando…", expanded=True):
-                    ok = _wa_y_capturar(fila["telefono"], mensaje, fila["serial"])
-                if ok:
+        if modo_manual:
+            # ── Modo manual: link wa.me ───────────────────────────────────────
+            st.info("Modo manual activo: haz clic en el link para abrir WhatsApp, envía el mensaje y marca como enviado.")
+
+            mb1, mb2, mb3 = st.columns(3)
+            with mb1:
+                st.link_button(
+                    "1️⃣ Abrir WhatsApp" if not fila["wa_capturado"] else "✅ WA marcado",
+                    url=wa_link,
+                    disabled=fila["wa_capturado"],
+                    use_container_width=True,
+                )
+            with mb2:
+                if st.button(
+                    "Marcar WA como enviado" if not fila["wa_capturado"] else "✅ WA enviado",
+                    key=f"mark_wa_{idx}",
+                    disabled=fila["wa_capturado"],
+                    use_container_width=True,
+                ):
                     st.session_state.devol_df.at[idx, "wa_capturado"] = True
-                    st.success("✅ Mensaje enviado y pantalla capturada")
+                    st.rerun()
+            with mb3:
+                if st.button(
+                    "Siguiente ▶",
+                    key=f"next_manual_{idx}",
+                    type="primary",
+                    disabled=not fila["wa_capturado"],
+                    use_container_width=True,
+                ):
+                    if idx < n_total - 1:
+                        st.session_state.devol_idx += 1
+                    else:
+                        st.success("🎉 Todos los seriales procesados")
                     st.rerun()
 
-        with b2:
-            lbl2 = "✅ Subido a iMile" if fila["imile_subido"] else "2️⃣ Subir a iMile"
-            if st.button(lbl2, key=f"imile_{idx}",
-                         disabled=fila["imile_subido"] or not fila["wa_capturado"],
-                         width="stretch",
-                         help="Primero debes enviar el WA y capturar" if not fila["wa_capturado"] else ""):
-                with st.status("Subiendo a iMile…", expanded=True):
-                    ok2 = _subir_imile(fila["serial"])
-                if ok2:
-                    st.session_state.devol_df.at[idx, "imile_subido"] = True
-                    st.success("✅ Imagen subida a iMile")
-                    st.rerun()
+        else:
+            # ── Modo automático: Selenium ─────────────────────────────────────
+            b1, b2, b3 = st.columns(3)
 
-        with b3:
-            # Etiqueta dinámica según lo que queda por hacer
-            if fila["wa_capturado"] and fila["imile_subido"]:
-                lbl3 = "Siguiente ▶"
-            elif fila["wa_capturado"]:
-                lbl3 = "2️⃣ iMile + Siguiente ▶"
-            else:
-                lbl3 = "1️⃣ WA + iMile + Siguiente ▶"
-
-            if st.button(lbl3, key=f"next_{idx}", type="primary", width="stretch"):
-                # Paso 1: WA (si aún no se hizo)
-                if not fila["wa_capturado"]:
+            with b1:
+                lbl = "✅ WA enviado y capturado" if fila["wa_capturado"] else "1️⃣ Enviar WA y Capturar"
+                if st.button(lbl, key=f"wa_{idx}",
+                             disabled=fila["wa_capturado"],
+                             width="stretch"):
                     with st.status("Enviando WhatsApp y capturando…", expanded=True):
-                        ok_wa = _wa_y_capturar(fila["telefono"], mensaje, fila["serial"])
-                    if ok_wa:
+                        ok = _wa_y_capturar(fila["telefono"], mensaje, fila["serial"])
+                    if ok:
                         st.session_state.devol_df.at[idx, "wa_capturado"] = True
-                        fila = st.session_state.devol_df.iloc[idx]
-                    else:
-                        st.error("Falló el envío de WA. Corrige antes de continuar.")
-                        st.stop()
+                        st.success("✅ Mensaje enviado y pantalla capturada")
+                        st.rerun()
 
-                # Paso 2: iMile (si aún no se hizo)
-                if not fila["imile_subido"]:
+            with b2:
+                lbl2 = "✅ Subido a iMile" if fila["imile_subido"] else "2️⃣ Subir a iMile"
+                if st.button(lbl2, key=f"imile_{idx}",
+                             disabled=fila["imile_subido"] or not fila["wa_capturado"],
+                             width="stretch",
+                             help="Primero debes enviar el WA y capturar" if not fila["wa_capturado"] else ""):
                     with st.status("Subiendo a iMile…", expanded=True):
-                        ok_imile = _subir_imile(fila["serial"])
-                    if ok_imile:
+                        ok2 = _subir_imile(fila["serial"])
+                    if ok2:
                         st.session_state.devol_df.at[idx, "imile_subido"] = True
-                    else:
-                        st.error("Falló la subida a iMile. Corrige antes de continuar.")
-                        st.stop()
+                        st.success("✅ Imagen subida a iMile")
+                        st.rerun()
 
-                # Paso 3: avanzar
-                if idx < n_total - 1:
-                    st.session_state.devol_idx += 1
+            with b3:
+                if fila["wa_capturado"] and fila["imile_subido"]:
+                    lbl3 = "Siguiente ▶"
+                elif fila["wa_capturado"]:
+                    lbl3 = "2️⃣ iMile + Siguiente ▶"
                 else:
-                    st.success("🎉 Todos los seriales procesados")
-                st.rerun()
+                    lbl3 = "1️⃣ WA + iMile + Siguiente ▶"
+
+                if st.button(lbl3, key=f"next_{idx}", type="primary", width="stretch"):
+                    if not fila["wa_capturado"]:
+                        with st.status("Enviando WhatsApp y capturando…", expanded=True):
+                            ok_wa = _wa_y_capturar(fila["telefono"], mensaje, fila["serial"])
+                        if ok_wa:
+                            st.session_state.devol_df.at[idx, "wa_capturado"] = True
+                            fila = st.session_state.devol_df.iloc[idx]
+                        else:
+                            st.error("Falló el envío de WA. Corrige antes de continuar.")
+                            st.stop()
+
+                    if not fila["imile_subido"]:
+                        with st.status("Subiendo a iMile…", expanded=True):
+                            ok_imile = _subir_imile(fila["serial"])
+                        if ok_imile:
+                            st.session_state.devol_df.at[idx, "imile_subido"] = True
+                        else:
+                            st.error("Falló la subida a iMile. Corrige antes de continuar.")
+                            st.stop()
+
+                    if idx < n_total - 1:
+                        st.session_state.devol_idx += 1
+                    else:
+                        st.success("🎉 Todos los seriales procesados")
+                    st.rerun()
