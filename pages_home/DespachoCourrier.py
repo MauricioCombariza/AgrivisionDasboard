@@ -40,6 +40,7 @@ if uploaded_file:
         if cod_men_input:
             try:
                 cod_men = int(float(cod_men_input))  # Permitir si escriben 123.0
+                cod_men_str = str(cod_men).zfill(4)  # Normalizado a 4 dígitos
 
                 # Asegurar que cod_men sea entero
                 df['cod_men'] = pd.to_numeric(df['cod_men'], errors='coerce').fillna(0).astype(int)
@@ -57,7 +58,7 @@ if uploaded_file:
 
                 # Descargar Excel
                 if not df_filtrado.empty:
-                    filename = f"despacho_{cod_men}_de{fecha_inicio}_a{fecha_fin}.xlsx"
+                    filename = f"despacho_{cod_men_str}_de{fecha_inicio}_a{fecha_fin}.xlsx"
                     buf = io.BytesIO()
                     df_filtrado.to_excel(buf, index=False)
                     st.download_button("📥 Descargar Excel", buf.getvalue(), filename,

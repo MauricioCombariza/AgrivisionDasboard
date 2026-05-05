@@ -221,15 +221,15 @@ uploaded_file = st.file_uploader("Sube tu archivo CSV", type="csv")
 if uploaded_file is not None:
     # Leer archivo CSV
     if cod_men_input:
-        cod_men_list = [int(c.strip()) for c in cod_men_input.split(",") if c.strip().isdigit()]
+        cod_men_list = [str(int(c.strip())).zfill(4) for c in cod_men_input.split(",") if c.strip().isdigit()]
         if cod_men_list:
-            st.write(f"Códigos ingresados: **{cod_men_list}**") 
+            st.write(f"Códigos ingresados: **{', '.join(cod_men_list)}**")
             orden_inicio_num = pd.to_numeric(orden_inicio, errors='coerce')
             orden_fin_num = pd.to_numeric(orden_fin, errors='coerce')
-                    
+
             df = pd.read_csv(uploaded_file, low_memory=False, encoding='latin1')
             df['orden'] = pd.to_numeric(df['orden'], errors='coerce')
-            df['cod_men'] = pd.to_numeric(df['cod_men'], errors='coerce')
+            df['cod_men'] = pd.to_numeric(df['cod_men'], errors='coerce').fillna(0).astype(int).astype(str).str.zfill(4)
             filtro_cod_men = df['cod_men'].isin(cod_men_list)
 
             # Filtro 2: Excluir 'retorno' con valores 'D' o 'o'
@@ -267,7 +267,7 @@ if uploaded_file is not None:
                 buf = io.BytesIO()
                 with pd.ExcelWriter(buf, engine="openpyxl") as writer:
                     df_filtrado.to_excel(writer, index=False, sheet_name="Hoja1")
-                nombre_xlsx = f"pendientes_códigos_{'_'.join(map(str, cod_men_list))}.xlsx"
+                nombre_xlsx = f"pendientes_códigos_{'_'.join(cod_men_list)}.xlsx"
                 st.download_button("📥 Descargar Excel", buf.getvalue(), nombre_xlsx,
                                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             else:

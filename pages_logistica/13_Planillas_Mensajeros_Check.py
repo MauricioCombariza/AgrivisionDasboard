@@ -1574,6 +1574,8 @@ try:
                         value="",
                         key="edit_nuevo_mensajero"
                     )
+                    if nuevo_cod_mensajero and nuevo_cod_mensajero.strip().isdigit():
+                        nuevo_cod_mensajero = nuevo_cod_mensajero.strip().zfill(4)
 
                 with col_msg2:
                     if nuevo_cod_mensajero:
