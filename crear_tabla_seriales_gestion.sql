@@ -46,8 +46,8 @@ CREATE TABLE IF NOT EXISTS seriales_gestion (
     fecha_modificacion  TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP
                         ON UPDATE CURRENT_TIMESTAMP,
 
-    -- Un serial solo puede tener UNA entrega y UNA devolución
-    UNIQUE KEY uk_serial_tipo   (serial, tipo_gestion),
+    -- Un serial solo puede tener UNA gestión (entrega o devolución, nunca las dos)
+    UNIQUE KEY uk_serial        (serial),
 
     KEY idx_planilla            (planilla),
     KEY idx_cod_men             (cod_men),
