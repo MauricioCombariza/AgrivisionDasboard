@@ -725,6 +725,34 @@ with tab4:
                     conn.commit()
                     cursor_update.close()
 
+                    # Sincronizar precio_mensajero en seriales_gestion para mayo 2026+
+                    # El JOIN por planilla+cod_men+tipo_gestion propaga el precio recalculado
+                    try:
+                        where_sg  = ("WHERE sg.fecha_escaner >= '2026-05-01'"
+                                     "  AND DATE(gm.fecha_escaner) BETWEEN %s AND %s")
+                        params_sg = [fecha_desde_rec, fecha_hasta_rec]
+                        if cliente_filtro != "TODOS":
+                            where_sg += " AND UPPER(TRIM(gm.cliente)) = UPPER(TRIM(%s))"
+                            params_sg.append(cliente_filtro)
+                        cur_sg = conn.cursor()
+                        cur_sg.execute(f"""
+                            UPDATE seriales_gestion sg
+                            JOIN gestiones_mensajero gm
+                                ON  sg.planilla  = gm.lot_esc
+                                AND sg.cod_men   = gm.cod_mensajero
+                                AND sg.tipo_gestion = CASE
+                                    WHEN gm.tipo_gestion LIKE '%%Entrega%%' THEN 'Entrega'
+                                    ELSE 'Devolucion'
+                                END
+                            SET sg.precio_mensajero = gm.valor_unitario
+                            {where_sg}
+                              AND gm.editado_manualmente = 0
+                        """, tuple(params_sg))
+                        conn.commit()
+                        cur_sg.close()
+                    except Exception:
+                        pass
+
                     st.success(f"✅ Se recalcularon **{filas_actualizadas} gestiones** exitosamente")
                     st.balloons()
                     st.rerun()

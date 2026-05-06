@@ -215,6 +215,132 @@ def _conectar_logistica():
 
 
 # ---------------------------------------------------------------------------
+# HELPERS PARA REGISTRO SERIAL POR SERIAL (MAYO 2026+)
+# ---------------------------------------------------------------------------
+
+def _cargar_precios_mensajero_sg(conn):
+    """Retorna {CLIENTE_UPPER: {'entrega': float, 'devolucion': float}}"""
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute("""
+            SELECT c.nombre_empresa, pc.costo_mensajero_entrega, pc.costo_mensajero_devolucion
+            FROM precios_cliente pc
+            JOIN clientes c ON pc.cliente_id = c.id
+            WHERE pc.activo = TRUE AND pc.ambito = 'bogota' AND pc.zona IS NULL
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        precios = {}
+        for p in rows:
+            key = p["nombre_empresa"].upper().strip()
+            if key not in precios:
+                precios[key] = {"entrega": 0, "devolucion": 0}
+            if p["costo_mensajero_entrega"]:
+                v = float(p["costo_mensajero_entrega"])
+                if precios[key]["entrega"] == 0 or v < precios[key]["entrega"]:
+                    precios[key]["entrega"] = v
+            if p["costo_mensajero_devolucion"]:
+                v = float(p["costo_mensajero_devolucion"])
+                if v > precios[key]["devolucion"]:
+                    precios[key]["devolucion"] = v
+        return precios
+    except Exception:
+        return {}
+
+
+def _cargar_precios_cliente_sg(conn):
+    """Retorna {CLIENTE_UPPER: {'entrega': float, 'devolucion': float}}"""
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute("""
+            SELECT c.nombre_empresa, pc.precio_unitario, pc.tipo_operacion
+            FROM precios_cliente pc
+            JOIN clientes c ON pc.cliente_id = c.id
+            WHERE pc.activo = TRUE AND pc.ambito = 'bogota' AND pc.zona IS NULL
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        precios = {}
+        for p in rows:
+            key = p["nombre_empresa"].upper().strip()
+            if key not in precios:
+                precios[key] = {"entrega": 0, "devolucion": 0}
+            tipo = p["tipo_operacion"]
+            if tipo in ("entrega", "devolucion") and p["precio_unitario"]:
+                precios[key][tipo] = float(p["precio_unitario"])
+        return precios
+    except Exception:
+        return {}
+
+
+def _cargar_personal_sg(conn):
+    """Retorna {CODIGO: {'id': int}}"""
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT codigo, id FROM personal WHERE activo = TRUE")
+        personal = {r["codigo"]: {"id": r["id"]} for r in cur.fetchall()}
+        cur.close()
+        return personal
+    except Exception:
+        return {}
+
+
+def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli, personal, origen="scanner"):
+    """
+    Inserta filas individuales en seriales_gestion para registros desde mayo 2026.
+    df_seriales debe tener: serial, f_esc, cod_men, lot_esc, mot_esc, no_entidad.
+    INSERT IGNORE respeta UNIQUE KEY (serial, tipo_gestion).
+    """
+    df_mayo = df_seriales[df_seriales["f_esc"] >= "2026.05.01"].copy()
+    if df_mayo.empty:
+        return 0
+
+    cur = conn.cursor()
+    insertados = 0
+    for _, row in df_mayo.iterrows():
+        try:
+            serial = str(row["serial"]).strip()
+            try:
+                planilla = str(int(float(str(row["lot_esc"]))))
+            except (ValueError, OverflowError):
+                planilla = str(row["lot_esc"])
+            fecha_esc    = str(row["f_esc"]).replace(".", "-")
+            cod_men      = str(row["cod_men"])
+            cliente      = str(row["no_entidad"])
+            mot          = str(row["mot_esc"]).lower().strip()
+            tipo_gestion = "Entrega" if "entrega" in mot else "Devolucion"
+            tipo_key     = "entrega" if tipo_gestion == "Entrega" else "devolucion"
+            cliente_key  = cliente.upper().strip()
+
+            precio_men_v = precios_men.get(cliente_key, {}).get(tipo_key, 0)
+            precio_cli_v = precios_cli.get(cliente_key, {}).get(tipo_key, 0)
+            mensajero_id = personal.get(cod_men, {}).get("id", None)
+
+            cur.execute("""
+                INSERT INTO seriales_gestion
+                    (serial, planilla, fecha_escaner, cod_men, mensajero_id,
+                     cliente, tipo_gestion, precio_cliente, precio_mensajero, origen)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    planilla         = IF(estado = 'pendiente', VALUES(planilla),         planilla),
+                    fecha_escaner    = IF(estado = 'pendiente', VALUES(fecha_escaner),    fecha_escaner),
+                    cod_men          = IF(estado = 'pendiente', VALUES(cod_men),          cod_men),
+                    mensajero_id     = IF(estado = 'pendiente', VALUES(mensajero_id),     mensajero_id),
+                    precio_cliente   = IF(estado = 'pendiente', VALUES(precio_cliente),   precio_cliente),
+                    precio_mensajero = IF(estado = 'pendiente', VALUES(precio_mensajero), precio_mensajero),
+                    origen           = IF(estado = 'pendiente', VALUES(origen),           origen)
+            """, (serial, planilla, fecha_esc, cod_men, mensajero_id,
+                  cliente, tipo_gestion, precio_cli_v, precio_men_v, origen))
+            if cur.rowcount > 0:
+                insertados += 1
+        except Exception:
+            pass
+    conn.commit()
+    cur.close()
+    return insertados
+
+
+# ---------------------------------------------------------------------------
 # ESTADO DEL TÚNEL SSH (visible antes del pipeline)
 # ---------------------------------------------------------------------------
 _col_t1, _col_t2 = st.columns([3, 1])
@@ -596,6 +722,22 @@ with st.expander(
                                 "cod_men",
                             ] = otro
 
+                    # Registrar seriales individuales en seriales_gestion para mayo 2026+
+                    try:
+                        conn_sg_histo = _conectar_logistica()
+                        if conn_sg_histo:
+                            _insertar_seriales_gestion_nube(
+                                df_ag,
+                                conn_sg_histo,
+                                _cargar_precios_mensajero_sg(conn_sg_histo),
+                                _cargar_precios_cliente_sg(conn_sg_histo),
+                                _cargar_personal_sg(conn_sg_histo),
+                                "scanner",
+                            )
+                            conn_sg_histo.close()
+                    except Exception:
+                        pass
+
                     # Agrupar y contar seriales por combinación de escáner
                     cols_grp = ["f_esc", "cod_men", "lot_esc", "orden", "mot_esc", "no_entidad"]
                     resultado_ag = (
@@ -653,6 +795,27 @@ with st.expander(
                             df_paq["lot_esc"]    = df_paq["orden"]
                             df_paq["mot_esc"]    = "Entrega"
                             df_paq["no_entidad"] = "Imile SAS"
+
+                            # Registrar seriales iMile individuales para mayo 2026+
+                            try:
+                                df_imile_ser = df_paq[[
+                                    "Waybill No.", "f_esc", "cod_men",
+                                    "lot_esc", "mot_esc", "no_entidad",
+                                ]].copy().rename(columns={"Waybill No.": "serial"})
+                                df_imile_ser["serial"] = df_imile_ser["serial"].astype(str)
+                                conn_sg_im = _conectar_logistica()
+                                if conn_sg_im:
+                                    _insertar_seriales_gestion_nube(
+                                        df_imile_ser,
+                                        conn_sg_im,
+                                        _cargar_precios_mensajero_sg(conn_sg_im),
+                                        _cargar_precios_cliente_sg(conn_sg_im),
+                                        _cargar_personal_sg(conn_sg_im),
+                                        "imile",
+                                    )
+                                    conn_sg_im.close()
+                            except Exception:
+                                pass
 
                             cols_grp_paq = [
                                 "f_esc", "cod_men", "lot_esc",

@@ -56,7 +56,8 @@ def cargar_histo_desde_bd(orden_minima=0):
         engine = get_bases_web_engine()
         query = f"""
             SELECT orden, f_emi, no_entidad, ciudad1, courrier,
-                   retorno, ret_esc, serial
+                   retorno, ret_esc, serial,
+                   f_esc, cod_men, lot_esc
             FROM histo
             WHERE CAST(orden AS SIGNED) >= {int(orden_minima)}
             ORDER BY CAST(orden AS SIGNED) DESC
@@ -65,6 +66,135 @@ def cargar_histo_desde_bd(orden_minima=0):
         return df, None
     except Exception as e:
         return None, str(e)
+
+
+def _cargar_precios_mensajero_sg(conn):
+    """Precios mensajero desde precios_cliente: {CLIENTE_UPPER: {'entrega': float, 'devolucion': float}}"""
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("""
+        SELECT c.nombre_empresa, pc.costo_mensajero_entrega, pc.costo_mensajero_devolucion
+        FROM precios_cliente pc
+        JOIN clientes c ON pc.cliente_id = c.id
+        WHERE pc.activo = TRUE AND pc.ambito = 'bogota' AND pc.zona IS NULL
+    """)
+    result = {}
+    for row in cursor.fetchall():
+        key = row['nombre_empresa'].upper().strip()
+        if key not in result:
+            result[key] = {'entrega': 0, 'devolucion': 0}
+        if row['costo_mensajero_entrega']:
+            v = float(row['costo_mensajero_entrega'])
+            if result[key]['entrega'] == 0 or v < result[key]['entrega']:
+                result[key]['entrega'] = v
+        if row['costo_mensajero_devolucion']:
+            v = float(row['costo_mensajero_devolucion'])
+            if v > result[key]['devolucion']:
+                result[key]['devolucion'] = v
+    cursor.close()
+    return result
+
+
+def _cargar_precios_cliente_sg(conn):
+    """Precios cliente: {CLIENTE_UPPER: {'entrega': float, 'devolucion': float}}"""
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("""
+        SELECT c.nombre_empresa, pc.precio_unitario, pc.tipo_operacion
+        FROM precios_cliente pc
+        JOIN clientes c ON pc.cliente_id = c.id
+        WHERE pc.activo = TRUE AND pc.ambito = 'bogota' AND pc.zona IS NULL
+    """)
+    result = {}
+    for row in cursor.fetchall():
+        key = row['nombre_empresa'].upper().strip()
+        if key not in result:
+            result[key] = {'entrega': 0, 'devolucion': 0}
+        tipo = str(row['tipo_operacion']).lower().strip()
+        if tipo in ('entrega', 'devolucion') and row['precio_unitario']:
+            result[key][tipo] = float(row['precio_unitario'])
+    cursor.close()
+    return result
+
+
+def _cargar_personal_sg(conn):
+    """Personal: {CODIGO: {'id': int, 'nombre': str}}"""
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("SELECT id, codigo, nombre_completo FROM personal WHERE activo = TRUE")
+    result = {
+        row['codigo']: {'id': row['id'], 'nombre': str(row['nombre_completo'] or '')}
+        for row in cursor.fetchall()
+    }
+    cursor.close()
+    return result
+
+
+def _cargar_mapeo_da(conn):
+    """mapeo_da: {nombre_da: cod_mensajero}"""
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT nombre_da, cod_mensajero FROM mapeo_da ORDER BY nombre_da")
+        result = {row['nombre_da']: row['cod_mensajero'] for row in cursor.fetchall()}
+        cursor.close()
+        return result
+    except Exception:
+        return {}
+
+
+def _insertar_seriales_gestion_proc(df_seriales, conn, precios_men, precios_cli, personal):
+    """Escribe una fila en seriales_gestion por cada serial de mayo 2026+.
+
+    Requiere columnas: serial, f_esc, lot_esc, cod_men, no_entidad, estado_item.
+    Usa INSERT IGNORE para respetar la restricción UNIQUE (serial, tipo_gestion).
+    """
+    # Filtrar solo registros con fecha ≥ 2026.05.01 y estado Entrega/Devolucion
+    df_may = df_seriales[
+        (df_seriales.get('f_esc', pd.Series(dtype=str)).fillna('') >= '2026.05.01') &
+        (df_seriales['estado_item'].isin(['Entregado', 'Devolución']))
+    ].copy() if 'f_esc' in df_seriales.columns else pd.DataFrame()
+
+    if df_may.empty:
+        return 0
+
+    cursor = conn.cursor()
+    insertados = 0
+    for _, row in df_may.iterrows():
+        try:
+            serial    = str(row['serial']).strip()
+            fecha_esc = str(row.get('f_esc', '')).replace('.', '-')
+            try:
+                planilla = str(int(float(str(row.get('lot_esc', '')))))
+            except (ValueError, OverflowError):
+                planilla = str(row.get('lot_esc', ''))
+            cod_men   = str(row.get('cod_men', '')).zfill(4)
+            cliente   = str(row.get('no_entidad', '')).strip()
+            estado_it = str(row['estado_item'])
+            tipo_gestion = 'Entrega' if estado_it == 'Entregado' else 'Devolucion'
+            tipo_key     = tipo_gestion.lower()
+            cliente_key  = cliente.upper().strip()
+            precio_men = precios_men.get(cliente_key, {}).get(tipo_key, 0)
+            precio_cli = precios_cli.get(cliente_key, {}).get(tipo_key, 0)
+            mensajero_id = personal.get(cod_men, {}).get('id', None)
+            cursor.execute("""
+                INSERT INTO seriales_gestion
+                    (serial, planilla, fecha_escaner, cod_men, mensajero_id,
+                     cliente, tipo_gestion, precio_cliente, precio_mensajero, origen)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'scanner')
+                ON DUPLICATE KEY UPDATE
+                    planilla         = IF(estado = 'pendiente', VALUES(planilla),         planilla),
+                    fecha_escaner    = IF(estado = 'pendiente', VALUES(fecha_escaner),    fecha_escaner),
+                    cod_men          = IF(estado = 'pendiente', VALUES(cod_men),          cod_men),
+                    mensajero_id     = IF(estado = 'pendiente', VALUES(mensajero_id),     mensajero_id),
+                    precio_cliente   = IF(estado = 'pendiente', VALUES(precio_cliente),   precio_cliente),
+                    precio_mensajero = IF(estado = 'pendiente', VALUES(precio_mensajero), precio_mensajero),
+                    origen           = IF(estado = 'pendiente', VALUES(origen),           origen)
+            """, (serial, planilla, fecha_esc, cod_men, mensajero_id,
+                  cliente, tipo_gestion, precio_cli, precio_men))
+            if cursor.rowcount > 0:
+                insertados += 1
+        except Exception:
+            pass
+    conn.commit()
+    cursor.close()
+    return insertados
 
 def verificar_julia():
     """Verifica si Julia está instalado"""
@@ -982,48 +1112,90 @@ with tab4:
             with st.expander("👀 Vista previa del archivo original"):
                 st.dataframe(df.head(20), use_container_width=True)
 
-            # Verificar que existan las columnas necesarias
-            if 'Scan time' not in df.columns or 'Waybill No.' not in df.columns:
-                st.error("❌ Error: El archivo debe contener las columnas 'Scan time' y 'Waybill No.'")
-                st.info(f"Columnas encontradas: {', '.join(df.columns)}")
+            # Verificar columnas necesarias (DA es requerida para mapear mensajero)
+            cols_requeridas_im = ['Scan time', 'Waybill No.', 'DA']
+            cols_faltantes_im  = [c for c in cols_requeridas_im if c not in df.columns]
+            if cols_faltantes_im:
+                st.error(f"❌ Columnas faltantes: {cols_faltantes_im}")
+                st.info(f"Columnas en el archivo: {', '.join(df.columns)}")
             else:
                 st.divider()
 
                 if st.button("🚀 Procesar Envíos Imile", type="primary"):
                     with st.spinner("Procesando datos..."):
                         try:
-                            # 1. Convertir 'Scan time' a datetime y extraer solo la fecha
-                            df['fecha_recepcion'] = pd.to_datetime(df['Scan time']).dt.date
+                            # 1. Convertir 'Scan time' a datetime
+                            df['_scan_dt']       = pd.to_datetime(df['Scan time'], errors='coerce')
+                            df['fecha_recepcion'] = df['_scan_dt'].dt.date
+                            df['f_esc']           = df['_scan_dt'].dt.strftime('%Y.%m.%d')
+                            df['lot_esc']         = df['fecha_recepcion'].apply(
+                                lambda x: "IM" + x.strftime('%Y%m%d') if pd.notnull(x) else 'IM_SIN_FECHA'
+                            )
 
-                            # 2. Agrupar por fecha para obtener la cantidad (conteo de Waybill No.)
+                            # 2. Resolver DA → cod_men (mapeo_da primero, personal por nombre como fallback)
+                            conn_da = conectar_db()
+                            mapeo_da    = _cargar_mapeo_da(conn_da) if conn_da else {}
+                            personal_da = _cargar_personal_sg(conn_da) if conn_da else {}
+                            personal_por_nombre = {
+                                v['nombre'].upper().strip(): k
+                                for k, v in personal_da.items()
+                                if v.get('nombre')
+                            }
+
+                            def resolver_da(nombre_da):
+                                if nombre_da in mapeo_da:
+                                    return mapeo_da[nombre_da]
+                                return personal_por_nombre.get(str(nombre_da).upper().strip(), '')
+
+                            df['cod_men'] = df['DA'].apply(resolver_da).fillna('')
+
+                            das_sin_mapeo = df[df['cod_men'] == '']['DA'].unique()
+                            if len(das_sin_mapeo) > 0:
+                                st.warning(f"DAs sin mapeo: {list(das_sin_mapeo)} — registrados con cod_men vacío")
+
+                            # 3. Agrupar por fecha → ordenes
                             df_new = df.groupby('fecha_recepcion')['Waybill No.'].count().reset_index()
                             df_new.columns = ['fecha_recepcion', 'cantidad_local']
+                            df_new['orden']           = df_new['fecha_recepcion'].apply(lambda x: "IM" + x.strftime('%Y%m%d'))
+                            df_new['nombre_cliente']  = 'Imile SAS'
+                            df_new['tipo_servicio']   = 'paquete'
+                            df_new['cantidad_nacional'] = 0
 
-                            # 3. Crear las columnas requeridas para carga masiva
-                            df_new['orden'] = df_new['fecha_recepcion'].apply(lambda x: "IM" + x.strftime('%Y%m%d'))
-                            df_new['nombre_cliente'] = 'Imile SAS'
-                            df_new['tipo_servicio'] = 'paquete'
-                            df_new['cantidad_nacional'] = 0  # Imile solo opera local
-
-                            # 4. Reordenar las columnas para que coincidan con el formato de carga masiva
-                            column_order = ['orden', 'fecha_recepcion', 'nombre_cliente', 'tipo_servicio', 'cantidad_local', 'cantidad_nacional']
-                            df_final = df_new[column_order]
-
-                            # Guardar en session_state
+                            df_final = df_new[['orden', 'fecha_recepcion', 'nombre_cliente',
+                                               'tipo_servicio', 'cantidad_local', 'cantidad_nacional']]
                             st.session_state['df_imile_procesado'] = df_final
 
-                            st.success(f"✅ Procesamiento completado: {len(df_final)} registros generados")
+                            # 4. Registrar seriales individuales en seriales_gestion (mayo 2026+)
+                            try:
+                                if conn_da:
+                                    pm_im = _cargar_precios_mensajero_sg(conn_da)
+                                    pc_im = _cargar_precios_cliente_sg(conn_da)
 
-                            # Mostrar estadísticas
+                                    df_ser = df[['Waybill No.', 'f_esc', 'cod_men', 'lot_esc']].copy()
+                                    df_ser = df_ser.rename(columns={'Waybill No.': 'serial'})
+                                    df_ser['serial']     = df_ser['serial'].astype(str)
+                                    df_ser['no_entidad'] = 'Imile SAS'
+                                    df_ser['estado_item'] = 'Entregado'
+
+                                    n_sg = _insertar_seriales_gestion_proc(df_ser, conn_da, pm_im, pc_im, personal_da)
+                                    if n_sg > 0:
+                                        st.info(f"📋 {n_sg} seriales iMile registrados en seriales_gestion")
+                            except Exception as e_sg:
+                                st.warning(f"seriales_gestion iMile: {e_sg}")
+                            finally:
+                                if conn_da:
+                                    conn_da.close()
+
+                            st.success(f"✅ Procesamiento completado: {len(df_final)} días / {len(df)} seriales")
+
                             col1, col2, col3 = st.columns(3)
                             with col1:
-                                st.metric("Registros Originales", len(df))
+                                st.metric("Seriales originales", len(df))
                             with col2:
-                                st.metric("Días Procesados", len(df_final))
+                                st.metric("Días procesados", len(df_final))
                             with col3:
-                                st.metric("Total Paquetes", df_final['cantidad_local'].sum())
+                                st.metric("Total paquetes", df_final['cantidad_local'].sum())
 
-                            # Mostrar preview del resultado
                             st.markdown("### 📊 Vista Previa del Resultado")
                             st.dataframe(df_final, use_container_width=True, hide_index=True)
 
@@ -1185,6 +1357,21 @@ with tab5:
                     # Mapear estados
                     df_gest['estado_item'] = df_gest.apply(mapear_estado_gestion, axis=1)
                     df_gest['orden_norm'] = df_gest['orden'].apply(normalizar_orden_gestion)
+
+                    # Registrar seriales individuales en seriales_gestion para mayo 2026+
+                    if 'serial' in df_gest.columns and 'f_esc' in df_gest.columns:
+                        try:
+                            conn_sg = conectar_db()
+                            if conn_sg:
+                                pm = _cargar_precios_mensajero_sg(conn_sg)
+                                pc = _cargar_precios_cliente_sg(conn_sg)
+                                ps = _cargar_personal_sg(conn_sg)
+                                n_sg = _insertar_seriales_gestion_proc(df_gest, conn_sg, pm, pc, ps)
+                                if n_sg > 0:
+                                    st.info(f"📋 {n_sg} seriales nuevos registrados en seriales_gestion")
+                                conn_sg.close()
+                        except Exception as e_sg:
+                            st.warning(f"seriales_gestion: {e_sg}")
 
                     # Agrupar por orden y estado (solo los que interesan)
                     estados_interes = ['Entregado', 'Devolución', 'En Lleva']

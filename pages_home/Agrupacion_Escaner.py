@@ -140,6 +140,30 @@ def cargar_precios_mensajero(conn):
         st.warning(f"Error cargando precios mensajero: {e}")
         return {}
 
+# Cargar precios unitarios por cliente (precio cobrado al cliente por entrega/devolucion)
+def cargar_precios_cliente_bd(conn):
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT c.nombre_empresa, pc.precio_unitario, pc.tipo_operacion
+            FROM precios_cliente pc
+            JOIN clientes c ON pc.cliente_id = c.id
+            WHERE pc.activo = TRUE AND pc.ambito = 'bogota' AND pc.zona IS NULL
+        """)
+        rows = cursor.fetchall()
+        cursor.close()
+        precios = {}
+        for p in rows:
+            key = p['nombre_empresa'].upper().strip()
+            if key not in precios:
+                precios[key] = {'entrega': 0, 'devolucion': 0}
+            tipo = p['tipo_operacion']
+            if tipo in ('entrega', 'devolucion') and p['precio_unitario']:
+                precios[key][tipo] = float(p['precio_unitario'])
+        return precios
+    except Exception:
+        return {}
+
 # Cargar personal activo (codigo -> id, nombre)
 def cargar_personal_bd(conn):
     try:
@@ -153,6 +177,64 @@ def cargar_personal_bd(conn):
         return {}
 
 # ============================================
+# REGISTRO SERIAL POR SERIAL (MAYO 2026+)
+# ============================================
+def insertar_seriales_gestion(df_seriales, conn, precios_mensajero, precios_cliente_bd, personal_bd, origen='scanner'):
+    """
+    Inserta filas individuales en seriales_gestion para registros desde mayo 2026.
+    df_seriales debe tener: serial, f_esc, cod_men, lot_esc, mot_esc, no_entidad.
+    INSERT IGNORE respeta el UNIQUE KEY (serial, tipo_gestion) sin interrumpir el flujo.
+    """
+    df_mayo = df_seriales[df_seriales['f_esc'] >= '2026.05.01'].copy()
+    if df_mayo.empty:
+        return 0
+
+    cursor = conn.cursor()
+    insertados = 0
+    for _, row in df_mayo.iterrows():
+        try:
+            serial = str(row['serial']).strip()
+            try:
+                planilla = str(int(float(str(row['lot_esc']))))
+            except (ValueError, OverflowError):
+                planilla = str(row['lot_esc'])
+            fecha_esc = str(row['f_esc']).replace('.', '-')  # AAAA.MM.DD → AAAA-MM-DD
+            cod_men = str(row['cod_men'])
+            cliente = str(row['no_entidad'])
+            mot = str(row['mot_esc']).lower().strip()
+            tipo_gestion = 'Entrega' if 'entrega' in mot else 'Devolucion'
+            tipo_key = 'entrega' if tipo_gestion == 'Entrega' else 'devolucion'
+            cliente_key = cliente.upper().strip()
+
+            precio_men = precios_mensajero.get(cliente_key, {}).get(tipo_key, 0)
+            precio_cli = precios_cliente_bd.get(cliente_key, {}).get(tipo_key, 0)
+            mensajero_id = personal_bd.get(cod_men, {}).get('id', None)
+
+            cursor.execute("""
+                INSERT INTO seriales_gestion
+                    (serial, planilla, fecha_escaner, cod_men, mensajero_id,
+                     cliente, tipo_gestion, precio_cliente, precio_mensajero, origen)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE
+                    planilla         = IF(estado = 'pendiente', VALUES(planilla),         planilla),
+                    fecha_escaner    = IF(estado = 'pendiente', VALUES(fecha_escaner),    fecha_escaner),
+                    cod_men          = IF(estado = 'pendiente', VALUES(cod_men),          cod_men),
+                    mensajero_id     = IF(estado = 'pendiente', VALUES(mensajero_id),     mensajero_id),
+                    precio_cliente   = IF(estado = 'pendiente', VALUES(precio_cliente),   precio_cliente),
+                    precio_mensajero = IF(estado = 'pendiente', VALUES(precio_mensajero), precio_mensajero),
+                    origen           = IF(estado = 'pendiente', VALUES(origen),           origen)
+            """, (serial, planilla, fecha_esc, cod_men, mensajero_id,
+                  cliente, tipo_gestion, precio_cli, precio_men, origen))
+            if cursor.rowcount > 0:
+                insertados += 1
+        except Exception:
+            pass
+    conn.commit()
+    cursor.close()
+    return insertados
+
+
+# ============================================
 # FUNCION DE SINCRONIZACION RAPIDA
 # ============================================
 def sincronizar_periodo(df_periodo, conn_sync):
@@ -162,6 +244,7 @@ def sincronizar_periodo(df_periodo, conn_sync):
 
     mapeos = cargar_mapeos(conn_sync)
     precios_mensajero = cargar_precios_mensajero(conn_sync)
+    precios_cliente_bd = cargar_precios_cliente_bd(conn_sync)
     personal_bd = cargar_personal_bd(conn_sync)
 
     # Planillas marcadas como revisadas → NO se modifican por sincronización
@@ -219,6 +302,12 @@ def sincronizar_periodo(df_periodo, conn_sync):
         if len(codigos_en_lote) == 2 and '0999' in codigos_en_lote:
             otro_codigo = [c for c in codigos_en_lote if c != '0999'][0]
             df_p.loc[(df_p['lot_esc'] == lote) & (df_p['cod_men'] == '0999'), 'cod_men'] = otro_codigo
+
+    # Registrar seriales individuales para mayo 2026+ (no interrumpe el flujo si falla)
+    try:
+        insertar_seriales_gestion(df_p, conn_sync, precios_mensajero, precios_cliente_bd, personal_bd, 'scanner')
+    except Exception:
+        pass
 
     # Agrupar
     columnas_agrupacion = ['f_esc', 'cod_men', 'lot_esc', 'orden', 'mot_esc', 'no_entidad']
@@ -898,6 +987,15 @@ with tab1:
                     conn_gest.commit()
                     barra.progress(1.0)
 
+                    # Registrar seriales individuales para mayo 2026+
+                    try:
+                        precios_cli_bd = cargar_precios_cliente_bd(conn_gest)
+                        insertar_seriales_gestion(
+                            df_filtrado, conn_gest, precios_mensajero, precios_cli_bd, personal_bd, 'scanner'
+                        )
+                    except Exception:
+                        pass
+
                     msg_reg = f"Registros insertados: {insertados} | Actualizados: {actualizados}"
                     if omitidos_rev > 0:
                         msg_reg += f" | {omitidos_rev} omitido(s) por planilla revisada 🔒"
@@ -1118,6 +1216,21 @@ with tab2:
 
                     # Guardar en session state
                     st.session_state.df_paquetes_resultado = df_final
+
+                    # Registrar seriales individuales iMile para mayo 2026+
+                    try:
+                        df_imile_ser = df_paq[['Waybill No.', 'f_esc', 'cod_men', 'lot_esc', 'mot_esc', 'no_entidad']].copy()
+                        df_imile_ser = df_imile_ser.rename(columns={'Waybill No.': 'serial'})
+                        df_imile_ser['serial'] = df_imile_ser['serial'].astype(str)
+                        conn_ser = nueva_conexion()
+                        if conn_ser:
+                            precios_men_im = cargar_precios_mensajero(conn_ser)
+                            precios_cli_im = cargar_precios_cliente_bd(conn_ser)
+                            personal_im = cargar_personal_bd(conn_ser)
+                            insertar_seriales_gestion(df_imile_ser, conn_ser, precios_men_im, precios_cli_im, personal_im, 'imile')
+                            conn_ser.close()
+                    except Exception:
+                        pass
 
                     st.success("Procesamiento completado")
 
