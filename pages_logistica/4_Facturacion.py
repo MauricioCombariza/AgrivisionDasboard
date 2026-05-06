@@ -305,10 +305,14 @@ with tab1:
 
     cursor.execute("""
         SELECT id, numero_orden, fecha_recepcion, cantidad_total, valor_total, estado
-        FROM ordenes
-        WHERE cliente_id = %s
-        AND (facturado = FALSE OR facturado IS NULL)
-        ORDER BY fecha_recepcion DESC
+        FROM ordenes o
+        WHERE o.cliente_id = %s
+        AND (o.facturado = FALSE OR o.facturado IS NULL)
+        AND YEAR(o.fecha_recepcion) = 2026
+        AND NOT EXISTS (
+            SELECT 1 FROM detalle_facturas_emitidas dfe WHERE dfe.orden_id = o.id
+        )
+        ORDER BY o.fecha_recepcion DESC
     """, (cliente_id,))
     ordenes_disponibles = cursor.fetchall()
 
