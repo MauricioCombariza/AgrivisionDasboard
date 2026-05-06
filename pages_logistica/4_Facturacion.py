@@ -69,6 +69,8 @@ with tab1:
         st.session_state._fac_ids_borrar = []
     if '_fac_nums_borrar' not in st.session_state:
         st.session_state._fac_nums_borrar = []
+    if '_fac_id_editar' not in st.session_state:
+        st.session_state._fac_id_editar = None
 
     col1, col2 = st.columns([3, 1])
 
@@ -159,9 +161,15 @@ with tab1:
                     # Guardar IDs seleccionados para el panel de borrado en col2
                     _ids_sel  = df.loc[idx_sel, 'id'].tolist()
                     _nums_sel = [str(n) for n in df.loc[idx_sel, 'numero_factura'].tolist()]
-                    if st.button("🗑️ Eliminar factura(s) seleccionada(s)", key="btn_del_fac_trigger", type="secondary"):
-                        st.session_state._fac_ids_borrar  = _ids_sel
-                        st.session_state._fac_nums_borrar = _nums_sel
+                    _col_btn_del, _col_btn_edit = st.columns(2)
+                    with _col_btn_del:
+                        if st.button("🗑️ Eliminar factura(s) seleccionada(s)", key="btn_del_fac_trigger", type="secondary", use_container_width=True):
+                            st.session_state._fac_ids_borrar  = _ids_sel
+                            st.session_state._fac_nums_borrar = _nums_sel
+                    with _col_btn_edit:
+                        if len(_ids_sel) == 1:
+                            if st.button("✏️ Editar factura", key="btn_edit_fac_trigger", use_container_width=True):
+                                st.session_state._fac_id_editar = _ids_sel[0]
 
                 try:
                     df_export['fecha_emision']    = pd.to_datetime(df_export['fecha_emision'])
@@ -248,6 +256,99 @@ with tab1:
                 st.rerun()
 
     st.divider()
+
+    # ── Panel de edición de factura ────────────────────────────────────────────
+    if st.session_state._fac_id_editar:
+        _fid_edit = st.session_state._fac_id_editar
+        try:
+            _cur_ed = conn.cursor(dictionary=True)
+            _cur_ed.execute("""
+                SELECT fe.*, c.nombre_empresa AS cliente_nombre
+                FROM facturas_emitidas fe
+                JOIN clientes c ON fe.cliente_id = c.id
+                WHERE fe.id = %s
+            """, (_fid_edit,))
+            _fac_ed = _cur_ed.fetchone()
+            _cur_ed.execute("""
+                SELECT descripcion FROM detalle_facturas_emitidas
+                WHERE factura_id = %s AND orden_id IS NULL
+                LIMIT 1
+            """, (_fid_edit,))
+            _det_ed  = _cur_ed.fetchone()
+            _desc_ed = _det_ed['descripcion'] if _det_ed else ''
+            _cur_ed.close()
+
+            if _fac_ed:
+                st.markdown(f"### ✏️ Editando factura **{_fac_ed['numero_factura']}** — {_fac_ed['cliente_nombre']}")
+                with st.form("form_editar_factura"):
+                    ec1, ec2, ec3 = st.columns(3)
+                    with ec1:
+                        e_numero = st.text_input("Número Factura *", value=_fac_ed['numero_factura'])
+                    with ec2:
+                        e_fecha_em = st.date_input("Fecha Emisión *",    value=_fac_ed['fecha_emision'])
+                        e_fecha_vc = st.date_input("Fecha Vencimiento *", value=_fac_ed['fecha_vencimiento'])
+                    with ec3:
+                        e_mes  = st.number_input("Mes Periodo",  min_value=1,    max_value=12,   value=int(_fac_ed['periodo_mes']  or date.today().month))
+                        e_anio = st.number_input("Año Periodo",  min_value=2020, max_value=2030, value=int(_fac_ed['periodo_anio'] or date.today().year))
+
+                    st.divider()
+                    ev1, ev2 = st.columns(2)
+                    with ev1:
+                        e_total = st.number_input("Valor Total *",    min_value=0.0, value=float(_fac_ed['total']),            step=10000.0, format="%.0f")
+                        e_saldo = st.number_input("Saldo Pendiente",  min_value=0.0, value=float(_fac_ed['saldo_pendiente']),  step=10000.0, format="%.0f")
+                    with ev2:
+                        e_items  = st.number_input("Cantidad Items", min_value=0, value=int(_fac_ed['cantidad_items'] or 0), step=1)
+                        _estados = ['pendiente', 'parcial', 'pagada', 'vencida', 'anulada']
+                        e_estado = st.selectbox("Estado", _estados,
+                                                index=_estados.index(_fac_ed['estado']) if _fac_ed['estado'] in _estados else 0)
+
+                    e_desc = st.text_input("Descripción / Concepto", value=_desc_ed)
+
+                    es1, es2 = st.columns(2)
+                    with es1:
+                        e_sub = st.form_submit_button("💾 Guardar Cambios", type="primary", use_container_width=True)
+                    with es2:
+                        e_can = st.form_submit_button("❌ Cancelar", use_container_width=True)
+
+                    if e_sub:
+                        if not e_numero:
+                            st.error("El número de factura es obligatorio")
+                        elif e_total <= 0:
+                            st.error("El valor debe ser mayor a 0")
+                        else:
+                            try:
+                                _cur_upd = conn.cursor()
+                                _cur_upd.execute("""
+                                    UPDATE facturas_emitidas
+                                    SET numero_factura=%s, fecha_emision=%s, fecha_vencimiento=%s,
+                                        periodo_mes=%s, periodo_anio=%s, cantidad_items=%s,
+                                        subtotal=%s, total=%s, saldo_pendiente=%s, estado=%s
+                                    WHERE id=%s
+                                """, (e_numero, e_fecha_em, e_fecha_vc,
+                                      e_mes, e_anio, e_items,
+                                      e_total, e_total, e_saldo, e_estado, _fid_edit))
+                                if e_desc:
+                                    _cur_upd.execute("""
+                                        UPDATE detalle_facturas_emitidas
+                                        SET descripcion=%s
+                                        WHERE factura_id=%s AND orden_id IS NULL
+                                    """, (e_desc, _fid_edit))
+                                conn.commit()
+                                _cur_upd.close()
+                                st.success(f"✅ Factura {e_numero} actualizada correctamente")
+                                st.session_state._fac_id_editar = None
+                                st.rerun()
+                            except Exception as _e:
+                                conn.rollback()
+                                st.error(f"Error al actualizar: {_e}")
+
+                    if e_can:
+                        st.session_state._fac_id_editar = None
+                        st.rerun()
+        except Exception as _e:
+            st.error(f"Error al cargar la factura para editar: {_e}")
+
+        st.divider()
 
     # ── Diagnóstico: órdenes en más de una factura ────────────────────────────
     with st.expander("🔍 Diagnóstico: órdenes facturadas más de una vez", expanded=False):
