@@ -57,7 +57,7 @@ def cargar_histo_desde_bd(orden_minima=0):
         query = f"""
             SELECT orden, f_emi, no_entidad, ciudad1, courrier,
                    retorno, ret_esc, serial,
-                   f_esc, cod_men, lot_esc
+                   f_esc, cod_men, lot_esc, n_servicio, planilla
             FROM histo
             WHERE CAST(orden AS SIGNED) >= {int(orden_minima)}
             ORDER BY CAST(orden AS SIGNED) DESC
@@ -95,10 +95,11 @@ def _cargar_precios_mensajero_sg(conn):
 
 
 def _cargar_precios_cliente_sg(conn):
-    """Precios cliente: {CLIENTE_UPPER: {'entrega': float, 'devolucion': float}}"""
+    """Precios cliente: {CLIENTE_UPPER: {'sobre_entrega': float, 'sobre_devolucion': float,
+                                         'paquete_entrega': float, 'paquete_devolucion': float}}"""
     cursor = conn.cursor(dictionary=True)
     cursor.execute("""
-        SELECT c.nombre_empresa, pc.precio_unitario, pc.tipo_operacion
+        SELECT c.nombre_empresa, pc.tipo_servicio, pc.tipo_operacion, pc.precio_unitario
         FROM precios_cliente pc
         JOIN clientes c ON pc.cliente_id = c.id
         WHERE pc.activo = TRUE AND pc.ambito = 'bogota' AND pc.zona IS NULL
@@ -107,10 +108,11 @@ def _cargar_precios_cliente_sg(conn):
     for row in cursor.fetchall():
         key = row['nombre_empresa'].upper().strip()
         if key not in result:
-            result[key] = {'entrega': 0, 'devolucion': 0}
-        tipo = str(row['tipo_operacion']).lower().strip()
-        if tipo in ('entrega', 'devolucion') and row['precio_unitario']:
-            result[key][tipo] = float(row['precio_unitario'])
+            result[key] = {}
+        ts = str(row.get('tipo_servicio') or 'sobre').lower().strip()
+        op = str(row.get('tipo_operacion') or '').lower().strip()
+        if op in ('entrega', 'devolucion') and row['precio_unitario']:
+            result[key][f'{ts}_{op}'] = float(row['precio_unitario'])
     cursor.close()
     return result
 
@@ -143,9 +145,8 @@ def _insertar_seriales_gestion_proc(df_seriales, conn, precios_men, precios_cli,
     """Escribe una fila en seriales_gestion por cada serial de mayo 2026+.
 
     Requiere columnas: serial, f_esc, lot_esc, cod_men, no_entidad, estado_item.
-    Usa INSERT IGNORE para respetar la restricción UNIQUE (serial, tipo_gestion).
+    Opcionales: orden, n_servicio (para tipo_envio y precio correcto).
     """
-    # Filtrar solo registros con fecha ≥ 2026.05.01 y estado Entrega/Devolucion
     df_may = df_seriales[
         (df_seriales.get('f_esc', pd.Series(dtype=str)).fillna('') >= '2026.05.01') &
         (df_seriales['estado_item'].isin(['Entregado', 'Devolución']))
@@ -153,6 +154,9 @@ def _insertar_seriales_gestion_proc(df_seriales, conn, precios_men, precios_cli,
 
     if df_may.empty:
         return 0
+
+    tiene_orden       = 'orden' in df_may.columns
+    tiene_n_servicio  = 'n_servicio' in df_may.columns
 
     cursor = conn.cursor()
     insertados = 0
@@ -164,30 +168,40 @@ def _insertar_seriales_gestion_proc(df_seriales, conn, precios_men, precios_cli,
                 planilla = str(int(float(str(row.get('lot_esc', '')))))
             except (ValueError, OverflowError):
                 planilla = str(row.get('lot_esc', ''))
-            cod_men   = str(row.get('cod_men', '')).zfill(4)
-            cliente   = str(row.get('no_entidad', '')).strip()
-            estado_it = str(row['estado_item'])
+            orden_val    = str(row['orden']).strip() if tiene_orden and pd.notna(row.get('orden')) else None
+            cod_men      = str(row.get('cod_men', '')).zfill(4)
+            cliente      = str(row.get('no_entidad', '')).strip()
+            estado_it    = str(row['estado_item'])
             tipo_gestion = 'Entrega' if estado_it == 'Entregado' else 'Devolucion'
             tipo_key     = tipo_gestion.lower()
             cliente_key  = cliente.upper().strip()
+
+            if tiene_n_servicio:
+                ns = str(row.get('n_servicio', '') or '').strip().upper()
+                tipo_envio = 'paquete' if ns == 'PAQUETES' else 'sobre'
+            else:
+                tipo_envio = 'sobre'
+
             precio_men = precios_men.get(cliente_key, {}).get(tipo_key, 0)
-            precio_cli = precios_cli.get(cliente_key, {}).get(tipo_key, 0)
+            precio_cli = precios_cli.get(cliente_key, {}).get(f'{tipo_envio}_{tipo_key}', 0)
             mensajero_id = personal.get(cod_men, {}).get('id', None)
             cursor.execute("""
                 INSERT INTO seriales_gestion
-                    (serial, planilla, fecha_escaner, cod_men, mensajero_id,
-                     cliente, tipo_gestion, precio_cliente, precio_mensajero, origen)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'scanner')
+                    (serial, planilla, orden, fecha_escaner, cod_men, mensajero_id,
+                     cliente, tipo_gestion, tipo_envio, precio_cliente, precio_mensajero, origen)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'scanner')
                 ON DUPLICATE KEY UPDATE
                     planilla         = IF(estado = 'pendiente', VALUES(planilla),         planilla),
+                    orden            = IF(estado = 'pendiente', VALUES(orden),            orden),
                     fecha_escaner    = IF(estado = 'pendiente', VALUES(fecha_escaner),    fecha_escaner),
                     cod_men          = IF(estado = 'pendiente', VALUES(cod_men),          cod_men),
                     mensajero_id     = IF(estado = 'pendiente', VALUES(mensajero_id),     mensajero_id),
+                    tipo_envio       = IF(estado = 'pendiente', VALUES(tipo_envio),       tipo_envio),
                     precio_cliente   = IF(estado = 'pendiente', VALUES(precio_cliente),   precio_cliente),
                     precio_mensajero = IF(estado = 'pendiente', VALUES(precio_mensajero), precio_mensajero),
                     origen           = IF(estado = 'pendiente', VALUES(origen),           origen)
-            """, (serial, planilla, fecha_esc, cod_men, mensajero_id,
-                  cliente, tipo_gestion, precio_cli, precio_men))
+            """, (serial, planilla, orden_val, fecha_esc, cod_men, mensajero_id,
+                  cliente, tipo_gestion, tipo_envio, precio_cli, precio_men))
             if cursor.rowcount > 0:
                 insertados += 1
         except Exception:

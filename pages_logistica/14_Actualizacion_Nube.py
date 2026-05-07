@@ -249,11 +249,12 @@ def _cargar_precios_mensajero_sg(conn):
 
 
 def _cargar_precios_cliente_sg(conn):
-    """Retorna {CLIENTE_UPPER: {'entrega': float, 'devolucion': float}}"""
+    """Retorna {CLIENTE_UPPER: {'sobre_entrega': float, 'sobre_devolucion': float,
+                                'paquete_entrega': float, 'paquete_devolucion': float}}"""
     try:
         cur = conn.cursor(dictionary=True)
         cur.execute("""
-            SELECT c.nombre_empresa, pc.precio_unitario, pc.tipo_operacion
+            SELECT c.nombre_empresa, pc.tipo_servicio, pc.tipo_operacion, pc.precio_unitario
             FROM precios_cliente pc
             JOIN clientes c ON pc.cliente_id = c.id
             WHERE pc.activo = TRUE AND pc.ambito = 'bogota' AND pc.zona IS NULL
@@ -264,10 +265,11 @@ def _cargar_precios_cliente_sg(conn):
         for p in rows:
             key = p["nombre_empresa"].upper().strip()
             if key not in precios:
-                precios[key] = {"entrega": 0, "devolucion": 0}
-            tipo = p["tipo_operacion"]
-            if tipo in ("entrega", "devolucion") and p["precio_unitario"]:
-                precios[key][tipo] = float(p["precio_unitario"])
+                precios[key] = {}
+            ts = str(p.get("tipo_servicio") or "sobre").lower().strip()
+            op = str(p.get("tipo_operacion") or "").lower().strip()
+            if op in ("entrega", "devolucion") and p["precio_unitario"]:
+                precios[key][f"{ts}_{op}"] = float(p["precio_unitario"])
         return precios
     except Exception:
         return {}
@@ -289,23 +291,26 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
     """
     Inserta filas individuales en seriales_gestion para registros desde mayo 2026.
     df_seriales debe tener: serial, f_esc, cod_men, lot_esc, mot_esc, no_entidad.
-    Courier externo (cod_men en COURIER_EXTERNOS_SET): planilla viene de la columna planilla de histo.
-    Mensajeros: planilla viene de lot_esc.
-    INSERT IGNORE respeta UNIQUE KEY (serial, tipo_gestion).
+    Opcionales: n_servicio (para tipo_envio), planilla (courier_externo), orden.
+    Courier externo: planilla de histo. Mensajeros: lot_esc. iMile: lot_esc.
+    precio_cliente usa clave '{tipo_envio}_{tipo_gestion}' para diferenciar sobre/paquete.
     """
     df_mayo = df_seriales[df_seriales["f_esc"] >= "2026.05.01"].copy()
     if df_mayo.empty:
         return 0
 
-    tiene_planilla = "planilla" in df_mayo.columns
+    tiene_planilla_col = "planilla" in df_mayo.columns
+    tiene_n_servicio   = "n_servicio" in df_mayo.columns
+    tiene_orden        = "orden" in df_mayo.columns
     cur = conn.cursor()
     insertados = 0
     for _, row in df_mayo.iterrows():
         try:
             serial  = str(row["serial"]).strip()
             cod_men = str(row["cod_men"])
-            # courier_externo → columna planilla de histo; mensajeros → lot_esc
-            if cod_men in COURIER_EXTERNOS_SET and tiene_planilla:
+
+            # planilla: courier_externo → campo planilla de histo; mensajeros/iMile → lot_esc
+            if cod_men in COURIER_EXTERNOS_SET and tiene_planilla_col:
                 raw_p    = row["planilla"]
                 planilla = str(raw_p).strip() if pd.notna(raw_p) and str(raw_p).strip() else "SIN NUMERO"
             else:
@@ -313,6 +318,23 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
                     planilla = str(int(float(str(row["lot_esc"]))))
                 except (ValueError, OverflowError):
                     planilla = str(row["lot_esc"])
+
+            # orden: campo orden de histo; iMile usa lot_esc
+            if tiene_orden:
+                orden_val = str(row["orden"]).strip() if pd.notna(row["orden"]) else None
+            else:
+                lot = str(row.get("lot_esc", ""))
+                orden_val = lot if lot else None
+
+            # tipo_envio: PAQUETES en n_servicio → paquete; iMile siempre paquete; resto sobre
+            if tiene_n_servicio:
+                ns = str(row.get("n_servicio", "") or "").strip().upper()
+                tipo_envio = "paquete" if ns == "PAQUETES" else "sobre"
+            elif origen == "imile":
+                tipo_envio = "paquete"
+            else:
+                tipo_envio = "sobre"
+
             fecha_esc    = str(row["f_esc"]).replace(".", "-")
             cliente      = str(row["no_entidad"])
             mot          = str(row["mot_esc"]).lower().strip()
@@ -321,24 +343,26 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
             cliente_key  = cliente.upper().strip()
 
             precio_men_v = precios_men.get(cliente_key, {}).get(tipo_key, 0)
-            precio_cli_v = precios_cli.get(cliente_key, {}).get(tipo_key, 0)
+            precio_cli_v = precios_cli.get(cliente_key, {}).get(f"{tipo_envio}_{tipo_key}", 0)
             mensajero_id = personal.get(cod_men, {}).get("id", None)
 
             cur.execute("""
                 INSERT INTO seriales_gestion
-                    (serial, planilla, fecha_escaner, cod_men, mensajero_id,
-                     cliente, tipo_gestion, precio_cliente, precio_mensajero, origen)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (serial, planilla, orden, fecha_escaner, cod_men, mensajero_id,
+                     cliente, tipo_gestion, tipo_envio, precio_cliente, precio_mensajero, origen)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                     planilla         = IF(estado = 'pendiente', VALUES(planilla),         planilla),
+                    orden            = IF(estado = 'pendiente', VALUES(orden),            orden),
                     fecha_escaner    = IF(estado = 'pendiente', VALUES(fecha_escaner),    fecha_escaner),
                     cod_men          = IF(estado = 'pendiente', VALUES(cod_men),          cod_men),
                     mensajero_id     = IF(estado = 'pendiente', VALUES(mensajero_id),     mensajero_id),
+                    tipo_envio       = IF(estado = 'pendiente', VALUES(tipo_envio),       tipo_envio),
                     precio_cliente   = IF(estado = 'pendiente', VALUES(precio_cliente),   precio_cliente),
                     precio_mensajero = IF(estado = 'pendiente', VALUES(precio_mensajero), precio_mensajero),
                     origen           = IF(estado = 'pendiente', VALUES(origen),           origen)
-            """, (serial, planilla, fecha_esc, cod_men, mensajero_id,
-                  cliente, tipo_gestion, precio_cli_v, precio_men_v, origen))
+            """, (serial, planilla, orden_val, fecha_esc, cod_men, mensajero_id,
+                  cliente, tipo_gestion, tipo_envio, precio_cli_v, precio_men_v, origen))
             if cur.rowcount > 0:
                 insertados += 1
         except Exception:
@@ -419,7 +443,8 @@ with st.expander(
             query = f"""
                 SELECT orden, f_emi, no_entidad, ciudad1, courrier,
                        retorno, ret_esc, serial,
-                       f_esc, cod_men, lot_esc, mot_esc, cod_sec
+                       f_esc, cod_men, lot_esc, mot_esc, cod_sec,
+                       n_servicio, planilla
                 FROM histo
                 ORDER BY
                     (lot_esc + 0) DESC,
@@ -808,7 +833,7 @@ with st.expander(
                             try:
                                 df_imile_ser = df_paq[[
                                     "Waybill No.", "f_esc", "cod_men",
-                                    "lot_esc", "mot_esc", "no_entidad",
+                                    "lot_esc", "mot_esc", "no_entidad", "orden",
                                 ]].copy().rename(columns={"Waybill No.": "serial"})
                                 df_imile_ser["serial"] = df_imile_ser["serial"].astype(str)
                                 conn_sg_im = _conectar_logistica()
