@@ -289,23 +289,31 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
     """
     Inserta filas individuales en seriales_gestion para registros desde mayo 2026.
     df_seriales debe tener: serial, f_esc, cod_men, lot_esc, mot_esc, no_entidad.
+    Courier externo (cod_men en COURIER_EXTERNOS_SET): planilla viene de la columna planilla de histo.
+    Mensajeros: planilla viene de lot_esc.
     INSERT IGNORE respeta UNIQUE KEY (serial, tipo_gestion).
     """
     df_mayo = df_seriales[df_seriales["f_esc"] >= "2026.05.01"].copy()
     if df_mayo.empty:
         return 0
 
+    tiene_planilla = "planilla" in df_mayo.columns
     cur = conn.cursor()
     insertados = 0
     for _, row in df_mayo.iterrows():
         try:
-            serial = str(row["serial"]).strip()
-            try:
-                planilla = str(int(float(str(row["lot_esc"]))))
-            except (ValueError, OverflowError):
-                planilla = str(row["lot_esc"])
+            serial  = str(row["serial"]).strip()
+            cod_men = str(row["cod_men"])
+            # courier_externo → columna planilla de histo; mensajeros → lot_esc
+            if cod_men in COURIER_EXTERNOS_SET and tiene_planilla:
+                raw_p    = row["planilla"]
+                planilla = str(raw_p).strip() if pd.notna(raw_p) and str(raw_p).strip() else "SIN NUMERO"
+            else:
+                try:
+                    planilla = str(int(float(str(row["lot_esc"]))))
+                except (ValueError, OverflowError):
+                    planilla = str(row["lot_esc"])
             fecha_esc    = str(row["f_esc"]).replace(".", "-")
-            cod_men      = str(row["cod_men"])
             cliente      = str(row["no_entidad"])
             mot          = str(row["mot_esc"]).lower().strip()
             tipo_gestion = "Entrega" if "entrega" in mot else "Devolucion"

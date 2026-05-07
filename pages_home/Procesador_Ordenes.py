@@ -268,46 +268,40 @@ def procesar_con_julia(ruta_archivo, orden_minima):
         return None, f"Error ejecutando Julia: {str(e)}"
 
 def procesar_dataframe_historico(df, orden_minima):
-    """Procesa un DataFrame histórico (puede venir de CSV o BD)"""
+    """Devuelve una fila por serial con columnas requeridas por 3_Ordenes.py."""
     try:
         df = df.copy()
 
-        # Pre-procesamiento de tipos de datos
         df['orden'] = pd.to_numeric(df['orden'], errors='coerce').fillna(0).astype(int)
-
-        # Filtrar por número de orden
         df_filtrado = df[df['orden'] >= orden_minima].copy()
 
-        # Excluir couriers LECTA y PRINDEL (comparación en minúsculas)
         couriers_excluidos = ['lecta', 'prindel']
         if 'courrier' in df_filtrado.columns:
-            df_filtrado = df_filtrado[~df_filtrado['courrier'].fillna('').str.lower().str.strip().isin(couriers_excluidos)]
+            df_filtrado = df_filtrado[
+                ~df_filtrado['courrier'].fillna('').str.lower().str.strip().isin(couriers_excluidos)
+            ]
 
-        # Conversión de fecha (soporta formato '2024.01.15' de bases_web y otros)
-        df_filtrado['f_emi'] = pd.to_datetime(df_filtrado['f_emi'], errors='coerce')
+        df_filtrado['fecha_recepcion'] = pd.to_datetime(df_filtrado['f_emi'], errors='coerce').dt.date
 
-        # Método eficiente con numpy: crear columnas de conteo condicional
-        es_local = df_filtrado['ciudad1'].fillna('').str.contains('bog', case=False, na=False) | df_filtrado['ciudad1'].isna()
+        # ambito desde ciudad1: bog → bogota, resto → nacional
+        df_filtrado['ambito'] = np.where(
+            df_filtrado['ciudad1'].fillna('').str.contains('bog', case=False, na=False),
+            'bogota',
+            'nacional'
+        )
 
-        df_filtrado['local'] = np.where(es_local, 1, 0)
-        df_filtrado['nacional'] = np.where(~es_local, 1, 0)
+        if 'no_entidad' in df_filtrado.columns:
+            df_filtrado = df_filtrado.rename(columns={'no_entidad': 'nombre_cliente'})
 
-        # Agrupación y suma directa
-        df_final = df_filtrado.groupby('orden').agg(
-            fecha_recepcion=('f_emi', 'first'),
-            nombre_cliente=('no_entidad', 'first'),
-            cantidad_local=('local', 'sum'),
-            cantidad_nacional=('nacional', 'sum')
-        ).reset_index()
+        df_filtrado['tipo_servicio'] = 'sobre'
+        df_filtrado['orden'] = df_filtrado['orden'].astype(str)
 
-        # Formato final
-        df_final['tipo_servicio'] = 'sobre'
-        df_final['fecha_recepcion'] = pd.to_datetime(df_final['fecha_recepcion']).dt.date
-
-        df_final['cantidad_local'] = df_final['cantidad_local'].astype(int)
-        df_final['cantidad_nacional'] = df_final['cantidad_nacional'].astype(int)
-
-        df_final = df_final[['orden', 'fecha_recepcion', 'nombre_cliente', 'tipo_servicio', 'cantidad_local', 'cantidad_nacional']]
+        df_final = (
+            df_filtrado[['orden', 'serial', 'fecha_recepcion', 'nombre_cliente', 'tipo_servicio', 'ambito']]
+            .dropna(subset=['serial'])
+            .drop_duplicates(subset=['serial'])
+            .copy()
+        )
 
         return df_final, None
     except Exception as e:
@@ -493,14 +487,13 @@ with tab1:
 
                     col1, col2, col3, col4 = st.columns(4)
                     with col1:
-                        st.metric("Total Órdenes", len(df_procesado))
+                        st.metric("Total Órdenes", df_procesado['orden'].nunique())
                     with col2:
-                        total_items = df_procesado['cantidad_local'].sum() + df_procesado['cantidad_nacional'].sum()
-                        st.metric("Total Items", f"{total_items:,}")
+                        st.metric("Total Seriales", f"{len(df_procesado):,}")
                     with col3:
-                        st.metric("Items Locales", f"{df_procesado['cantidad_local'].sum():,}")
+                        st.metric("Seriales Bogotá", f"{(df_procesado['ambito'] == 'bogota').sum():,}")
                     with col4:
-                        st.metric("Items Nacionales", f"{df_procesado['cantidad_nacional'].sum():,}")
+                        st.metric("Seriales Nacional", f"{(df_procesado['ambito'] == 'nacional').sum():,}")
 
                     st.markdown("### 🏢 Clientes Identificados")
                     clientes_unicos = df_procesado['nombre_cliente'].unique()
@@ -560,14 +553,13 @@ with tab1:
                         # Mostrar estadísticas
                         col1, col2, col3, col4 = st.columns(4)
                         with col1:
-                            st.metric("Total Órdenes", len(df_procesado))
+                            st.metric("Total Órdenes", df_procesado['orden'].nunique())
                         with col2:
-                            total_items = df_procesado['cantidad_local'].sum() + df_procesado['cantidad_nacional'].sum()
-                            st.metric("Total Items", f"{total_items:,}")
+                            st.metric("Total Seriales", f"{len(df_procesado):,}")
                         with col3:
-                            st.metric("Items Locales", f"{df_procesado['cantidad_local'].sum():,}")
+                            st.metric("Seriales Bogotá", f"{(df_procesado['ambito'] == 'bogota').sum():,}")
                         with col4:
-                            st.metric("Items Nacionales", f"{df_procesado['cantidad_nacional'].sum():,}")
+                            st.metric("Seriales Nacional", f"{(df_procesado['ambito'] == 'nacional').sum():,}")
 
                         st.info("👉 Ahora vaya a la pestaña **'Resultado'** para mapear clientes y generar el CSV final")
                     else:
@@ -611,14 +603,13 @@ with tab1:
                 # Estadísticas
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("Total Órdenes", len(df_procesado))
+                    st.metric("Total Órdenes", df_procesado['orden'].nunique())
                 with col2:
-                    total_items = df_procesado['cantidad_local'].sum() + df_procesado['cantidad_nacional'].sum()
-                    st.metric("Total Items", f"{total_items:,}")
+                    st.metric("Total Seriales", f"{len(df_procesado):,}")
                 with col3:
-                    st.metric("Items Locales", f"{df_procesado['cantidad_local'].sum():,}")
+                    st.metric("Seriales Bogotá", f"{(df_procesado['ambito'] == 'bogota').sum():,}")
                 with col4:
-                    st.metric("Items Nacionales", f"{df_procesado['cantidad_nacional'].sum():,}")
+                    st.metric("Seriales Nacional", f"{(df_procesado['ambito'] == 'nacional').sum():,}")
 
                 # Clientes únicos
                 st.markdown("### 🏢 Clientes Identificados")
@@ -845,21 +836,20 @@ with tab3:
         col1, col2 = st.columns(2)
 
         with col1:
-            st.markdown("### ✅ Órdenes Nuevas")
-            st.metric("Total", len(df_nuevas))
+            st.markdown("### ✅ Seriales Nuevos")
+            st.metric("Seriales", len(df_nuevas))
             if len(df_nuevas) > 0:
-                total_items = df_nuevas['cantidad_local'].sum() + df_nuevas['cantidad_nacional'].sum()
-                st.metric("Total Items", f"{total_items:,}")
+                st.metric("Órdenes únicas", df_nuevas['orden'].nunique())
             else:
-                st.metric("Total Items", "0")
+                st.metric("Órdenes únicas", "0")
 
             if len(df_nuevas) > 0:
                 with st.expander("Ver datos"):
                     st.dataframe(df_nuevas, use_container_width=True, hide_index=True)
 
         with col2:
-            st.markdown("### ⚠️ Órdenes Duplicadas (Excluidas)")
-            st.metric("Total", len(df_duplicadas))
+            st.markdown("### ⚠️ Seriales de Órdenes Ya Existentes (Excluidos)")
+            st.metric("Seriales", len(df_duplicadas))
 
             if len(df_duplicadas) > 0:
                 with st.expander("Ver datos"):
@@ -1047,11 +1037,10 @@ with tab3:
                 )
 
             with col2:
-                st.metric("Órdenes en CSV", len(df_nuevas))
+                st.metric("Seriales en CSV", len(df_nuevas))
 
             with col3:
-                total_items_csv = df_nuevas['cantidad_local'].sum() + df_nuevas['cantidad_nacional'].sum()
-                st.metric("Items Totales", f"{total_items_csv:,}")
+                st.metric("Órdenes únicas", df_nuevas['orden'].nunique())
 
             st.info("""
                 💡 **Siguiente paso:**
@@ -1071,14 +1060,14 @@ with tab3:
 
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Órdenes Procesadas", len(st.session_state['df_procesado']))
+            st.metric("Seriales Procesados", len(st.session_state['df_procesado']))
         with col2:
-            st.metric("Órdenes Nuevas", len(df_nuevas) if 'df_nuevas' in locals() else 0)
+            st.metric("Seriales Nuevos", len(df_nuevas) if 'df_nuevas' in locals() else 0)
         with col3:
-            st.metric("Órdenes Duplicadas", len(df_duplicadas) if 'df_duplicadas' in locals() else 0)
+            st.metric("Seriales Excluidos", len(df_duplicadas) if 'df_duplicadas' in locals() else 0)
         with col4:
             efectividad = (len(df_nuevas) / len(st.session_state['df_procesado']) * 100) if len(st.session_state['df_procesado']) > 0 and 'df_nuevas' in locals() else 0
-            st.metric("% Nuevas", f"{efectividad:.1f}%")
+            st.metric("% Nuevos", f"{efectividad:.1f}%")
 
 # ==============================================================================
 # TAB 4: ENVIOS IMILE
