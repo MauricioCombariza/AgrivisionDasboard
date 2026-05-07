@@ -287,13 +287,69 @@ def _cargar_personal_sg(conn):
         return {}
 
 
+def _cargar_clientes_sg(conn):
+    """Retorna {nombre_lower: cliente_id}"""
+    try:
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT id, nombre_empresa FROM clientes WHERE activo = TRUE")
+        result = {r["nombre_empresa"].strip().lower(): r["id"] for r in cur.fetchall()}
+        cur.close()
+        return result
+    except Exception:
+        return {}
+
+
+def _sync_ordenes(ordenes_data: dict, conn, dict_clientes: dict):
+    """
+    Upsert en la tabla ordenes a partir del dict acumulado durante la inserción
+    de seriales. ordenes_data = {numero_orden: {cliente, fecha_recepcion,
+    tipo_servicio, local, nac, valor}}.
+    Si la orden ya existe solo actualiza cantidades y valor; si no, la crea.
+    """
+    if not ordenes_data:
+        return
+    cur = conn.cursor()
+    for numero_orden, data in ordenes_data.items():
+        try:
+            cliente_id = dict_clientes.get(data["cliente"].lower().strip())
+            if not cliente_id:
+                continue
+            c_local = data["local"]
+            c_nac   = data["nac"]
+            v_total = data["valor"]
+            cur.execute("SELECT id FROM ordenes WHERE numero_orden = %s", (numero_orden,))
+            row = cur.fetchone()
+            if row:
+                cur.execute("""
+                    UPDATE ordenes
+                    SET cantidad_local              = %s,
+                        cantidad_nacional           = %s,
+                        cantidad_recibido_local     = %s,
+                        cantidad_recibido_nacional  = %s,
+                        valor_total                 = %s
+                    WHERE id = %s
+                """, (c_local, c_nac, c_local, c_nac, v_total, row[0]))
+            else:
+                cur.execute("""
+                    INSERT INTO ordenes
+                        (numero_orden, cliente_id, fecha_recepcion, tipo_servicio,
+                         cantidad_local, cantidad_nacional,
+                         cantidad_recibido_local, cantidad_recibido_nacional,
+                         valor_total, estado)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'activa')
+                """, (numero_orden, cliente_id, data["fecha_recepcion"],
+                      data["tipo_servicio"], c_local, c_nac, c_local, c_nac, v_total))
+        except Exception:
+            pass
+    cur.close()
+
+
 def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli, personal, origen="scanner"):
     """
-    Inserta filas individuales en seriales_gestion para registros desde mayo 2026.
+    Inserta filas individuales en seriales_gestion para registros desde mayo 2026
+    y sincroniza automáticamente la tabla ordenes.
     df_seriales debe tener: serial, f_esc, cod_men, lot_esc, mot_esc, no_entidad.
-    Opcionales: n_servicio (para tipo_envio), planilla (courier_externo), orden.
-    Courier externo: planilla de histo. Mensajeros: lot_esc. iMile: lot_esc.
-    precio_cliente usa clave '{tipo_envio}_{tipo_gestion}' para diferenciar sobre/paquete.
+    Opcionales: f_emi (para fecha_recepcion y corte), n_servicio, planilla, orden, ciudad1.
     """
     # Corte por f_emi (fecha emisión de la orden) cuando está disponible;
     # iMile no tiene f_emi en el df, usa f_esc como equivalente.
@@ -307,15 +363,19 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
     tiene_planilla_col = "planilla" in df_mayo.columns
     tiene_n_servicio   = "n_servicio" in df_mayo.columns
     tiene_orden        = "orden" in df_mayo.columns
+    tiene_f_emi        = "f_emi" in df_mayo.columns
+    tiene_ciudad       = "ciudad1" in df_mayo.columns
+
     cur = conn.cursor()
-    insertados = 0
+    insertados  = 0
+    ordenes_acc = {}   # {numero_orden: {cliente, fecha_recepcion, tipo_servicio, local, nac, valor}}
+
     for _, row in df_mayo.iterrows():
         try:
             serial  = str(row["serial"]).strip()
             cod_men = str(row["cod_men"])
 
             # planilla: courier_externo → campo planilla de histo; mensajeros/iMile → lot_esc
-            # Si lot_esc está vacío para un mensajero, usar planilla de histo como respaldo.
             if cod_men in COURIER_EXTERNOS_SET and tiene_planilla_col:
                 raw_p    = row["planilla"]
                 planilla = str(raw_p).strip() if pd.notna(raw_p) and str(raw_p).strip() else ""
@@ -328,7 +388,6 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
                 planilla = lot_int if lot_int and lot_int != "0" else ""
 
             # orden: campo orden de histo; iMile usa lot_esc.
-            # Tratar "0" (fillna(0) en agrupacion) como ausente.
             if tiene_orden:
                 raw_ord = row["orden"]
                 ord_str = str(raw_ord).strip() if pd.notna(raw_ord) else ""
@@ -376,8 +435,37 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
                   cliente, tipo_gestion, tipo_envio, precio_cli_v, precio_men_v, origen))
             if cur.rowcount > 0:
                 insertados += 1
+
+            # Acumular datos para sincronizar ordenes
+            if orden_val:
+                es_local = (
+                    "bog" in str(row.get("ciudad1", "")).lower()
+                    if tiene_ciudad else origen == "imile"
+                )
+                fecha_rec = str(row["f_emi"]).replace(".", "-") if tiene_f_emi else fecha_esc
+                if orden_val not in ordenes_acc:
+                    ordenes_acc[orden_val] = {
+                        "cliente": cliente,
+                        "fecha_recepcion": fecha_rec,
+                        "tipo_servicio": tipo_envio,
+                        "local": 0, "nac": 0, "valor": 0.0,
+                    }
+                if es_local:
+                    ordenes_acc[orden_val]["local"] += 1
+                else:
+                    ordenes_acc[orden_val]["nac"] += 1
+                ordenes_acc[orden_val]["valor"] += precio_cli_v
+
         except Exception:
             pass
+
+    # Sincronizar ordenes con los datos acumulados
+    try:
+        dict_clientes = _cargar_clientes_sg(conn)
+        _sync_ordenes(ordenes_acc, conn, dict_clientes)
+    except Exception:
+        pass
+
     conn.commit()
     cur.close()
     return insertados
