@@ -310,21 +310,33 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
             cod_men = str(row["cod_men"])
 
             # planilla: courier_externo → campo planilla de histo; mensajeros/iMile → lot_esc
+            # Si lot_esc está vacío para un mensajero, usar planilla de histo como respaldo.
             if cod_men in COURIER_EXTERNOS_SET and tiene_planilla_col:
                 raw_p    = row["planilla"]
                 planilla = str(raw_p).strip() if pd.notna(raw_p) and str(raw_p).strip() else "SIN NUMERO"
             else:
+                lot_raw = str(row.get("lot_esc", "")).strip()
                 try:
-                    planilla = str(int(float(str(row["lot_esc"]))))
+                    lot_int = str(int(float(lot_raw))) if lot_raw else ""
                 except (ValueError, OverflowError):
-                    planilla = str(row["lot_esc"])
+                    lot_int = lot_raw
+                if lot_int and lot_int != "0":
+                    planilla = lot_int
+                elif tiene_planilla_col:
+                    raw_p = row["planilla"]
+                    planilla = str(raw_p).strip() if pd.notna(raw_p) and str(raw_p).strip() else ""
+                else:
+                    planilla = ""
 
-            # orden: campo orden de histo; iMile usa lot_esc
+            # orden: campo orden de histo; iMile usa lot_esc.
+            # Tratar "0" (fillna(0) en agrupacion) como ausente.
             if tiene_orden:
-                orden_val = str(row["orden"]).strip() if pd.notna(row["orden"]) else None
+                raw_ord = row["orden"]
+                ord_str = str(raw_ord).strip() if pd.notna(raw_ord) else ""
+                orden_val = ord_str if ord_str and ord_str != "0" else None
             else:
-                lot = str(row.get("lot_esc", ""))
-                orden_val = lot if lot else None
+                lot_raw2 = str(row.get("lot_esc", "")).strip()
+                orden_val = lot_raw2 if lot_raw2 and lot_raw2 != "0" else None
 
             # tipo_envio: PAQUETES en n_servicio → paquete; iMile siempre paquete; resto sobre
             if tiene_n_servicio:

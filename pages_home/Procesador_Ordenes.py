@@ -164,11 +164,23 @@ def _insertar_seriales_gestion_proc(df_seriales, conn, precios_men, precios_cli,
         try:
             serial    = str(row['serial']).strip()
             fecha_esc = str(row.get('f_esc', '')).replace('.', '-')
+            lot_raw = str(row.get('lot_esc', '')).strip()
             try:
-                planilla = str(int(float(str(row.get('lot_esc', '')))))
+                lot_int = str(int(float(lot_raw))) if lot_raw else ""
             except (ValueError, OverflowError):
-                planilla = str(row.get('lot_esc', ''))
-            orden_val    = str(row['orden']).strip() if tiene_orden and pd.notna(row.get('orden')) else None
+                lot_int = lot_raw
+            if lot_int and lot_int != "0":
+                planilla = lot_int
+            elif 'planilla' in df_may.columns:
+                raw_p = row.get('planilla', '')
+                planilla = str(raw_p).strip() if pd.notna(raw_p) and str(raw_p).strip() else ""
+            else:
+                planilla = ""
+            if tiene_orden and pd.notna(row.get('orden')):
+                ord_str = str(row['orden']).strip()
+                orden_val = ord_str if ord_str and ord_str != "0" else None
+            else:
+                orden_val = None
             cod_men      = str(row.get('cod_men', '')).zfill(4)
             cliente      = str(row.get('no_entidad', '')).strip()
             estado_it    = str(row['estado_item'])
