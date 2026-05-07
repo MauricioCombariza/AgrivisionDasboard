@@ -295,7 +295,12 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
     Courier externo: planilla de histo. Mensajeros: lot_esc. iMile: lot_esc.
     precio_cliente usa clave '{tipo_envio}_{tipo_gestion}' para diferenciar sobre/paquete.
     """
-    df_mayo = df_seriales[df_seriales["f_esc"] >= "2026.05.01"].copy()
+    # Corte por f_emi (fecha emisión de la orden) cuando está disponible;
+    # iMile no tiene f_emi en el df, usa f_esc como equivalente.
+    if "f_emi" in df_seriales.columns:
+        df_mayo = df_seriales[df_seriales["f_emi"].fillna("") >= "2026.05.01"].copy()
+    else:
+        df_mayo = df_seriales[df_seriales["f_esc"].fillna("") >= "2026.05.01"].copy()
     if df_mayo.empty:
         return 0
 
