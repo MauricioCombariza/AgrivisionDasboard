@@ -151,11 +151,12 @@ with tab1:
                             # cuando el serial pase de 'pendiente' a 'Entrega' o 'Devolucion'.
                             cursor.execute("""
                                 INSERT IGNORE INTO seriales_gestion
-                                    (serial, planilla, fecha_escaner, cod_men, cliente,
-                                     tipo_gestion, precio_cliente, precio_mensajero,
-                                     estado, origen)
-                                VALUES (%s, %s, %s, '', %s, 'Entrega', %s, %s, 'pendiente', 'manual')
-                            """, (serial, num_orden, fecha, cliente_nom, precio_cli, precio_men))
+                                    (serial, planilla, orden, fecha_escaner, cod_men, cliente,
+                                     tipo_gestion, tipo_envio, ambito,
+                                     precio_cliente, precio_mensajero, estado, origen)
+                                VALUES (%s, '', %s, %s, '', %s, 'Entrega', %s, %s, %s, %s, 'pendiente', 'manual')
+                            """, (serial, num_orden, fecha, cliente_nom,
+                                  tipo_ser, ambito_val, precio_cli, precio_men))
 
                             if cursor.rowcount > 0:
                                 sg_nuevos += 1
