@@ -147,10 +147,17 @@ def _insertar_seriales_gestion_proc(df_seriales, conn, precios_men, precios_cli,
     Requiere columnas: serial, f_esc, lot_esc, cod_men, no_entidad, estado_item.
     Opcionales: orden, n_servicio (para tipo_envio y precio correcto).
     """
+    # Corte por f_emi (fecha emisión); si no está disponible usa f_esc.
+    if 'f_emi' in df_seriales.columns:
+        _fecha_corte = df_seriales['f_emi'].fillna('')
+    elif 'f_esc' in df_seriales.columns:
+        _fecha_corte = df_seriales['f_esc'].fillna('')
+    else:
+        _fecha_corte = pd.Series('', index=df_seriales.index)
     df_may = df_seriales[
-        (df_seriales.get('f_esc', pd.Series(dtype=str)).fillna('') >= '2026.05.01') &
+        (_fecha_corte >= '2026.05.01') &
         (df_seriales['estado_item'].isin(['Entregado', 'Devolución']))
-    ].copy() if 'f_esc' in df_seriales.columns else pd.DataFrame()
+    ].copy() if not df_seriales.empty else pd.DataFrame()
 
     if df_may.empty:
         return 0
@@ -164,11 +171,17 @@ def _insertar_seriales_gestion_proc(df_seriales, conn, precios_men, precios_cli,
         try:
             serial    = str(row['serial']).strip()
             fecha_esc = str(row.get('f_esc', '')).replace('.', '-')
+            lot_raw = str(row.get('lot_esc', '')).strip()
             try:
-                planilla = str(int(float(str(row.get('lot_esc', '')))))
+                lot_int = str(int(float(lot_raw))) if lot_raw else ""
             except (ValueError, OverflowError):
-                planilla = str(row.get('lot_esc', ''))
-            orden_val    = str(row['orden']).strip() if tiene_orden and pd.notna(row.get('orden')) else None
+                lot_int = lot_raw
+            planilla = lot_int if lot_int and lot_int != "0" else ""
+            if tiene_orden and pd.notna(row.get('orden')):
+                ord_str = str(row['orden']).strip()
+                orden_val = ord_str if ord_str and ord_str != "0" else ""
+            else:
+                orden_val = ""
             cod_men      = str(row.get('cod_men', '')).zfill(4)
             cliente      = str(row.get('no_entidad', '')).strip()
             estado_it    = str(row['estado_item'])

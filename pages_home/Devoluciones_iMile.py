@@ -19,6 +19,7 @@ import json
 import platform
 import subprocess
 import webbrowser
+from urllib.parse import quote
 
 import streamlit as st
 import pandas as pd

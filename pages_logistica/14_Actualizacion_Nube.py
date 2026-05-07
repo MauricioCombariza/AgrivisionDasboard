@@ -295,7 +295,12 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
     Courier externo: planilla de histo. Mensajeros: lot_esc. iMile: lot_esc.
     precio_cliente usa clave '{tipo_envio}_{tipo_gestion}' para diferenciar sobre/paquete.
     """
-    df_mayo = df_seriales[df_seriales["f_esc"] >= "2026.05.01"].copy()
+    # Corte por f_emi (fecha emisión de la orden) cuando está disponible;
+    # iMile no tiene f_emi en el df, usa f_esc como equivalente.
+    if "f_emi" in df_seriales.columns:
+        df_mayo = df_seriales[df_seriales["f_emi"].fillna("") >= "2026.05.01"].copy()
+    else:
+        df_mayo = df_seriales[df_seriales["f_esc"].fillna("") >= "2026.05.01"].copy()
     if df_mayo.empty:
         return 0
 
@@ -310,21 +315,27 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
             cod_men = str(row["cod_men"])
 
             # planilla: courier_externo → campo planilla de histo; mensajeros/iMile → lot_esc
+            # Si lot_esc está vacío para un mensajero, usar planilla de histo como respaldo.
             if cod_men in COURIER_EXTERNOS_SET and tiene_planilla_col:
                 raw_p    = row["planilla"]
-                planilla = str(raw_p).strip() if pd.notna(raw_p) and str(raw_p).strip() else "SIN NUMERO"
+                planilla = str(raw_p).strip() if pd.notna(raw_p) and str(raw_p).strip() else ""
             else:
+                lot_raw = str(row.get("lot_esc", "")).strip()
                 try:
-                    planilla = str(int(float(str(row["lot_esc"]))))
+                    lot_int = str(int(float(lot_raw))) if lot_raw else ""
                 except (ValueError, OverflowError):
-                    planilla = str(row["lot_esc"])
+                    lot_int = lot_raw
+                planilla = lot_int if lot_int and lot_int != "0" else ""
 
-            # orden: campo orden de histo; iMile usa lot_esc
+            # orden: campo orden de histo; iMile usa lot_esc.
+            # Tratar "0" (fillna(0) en agrupacion) como ausente.
             if tiene_orden:
-                orden_val = str(row["orden"]).strip() if pd.notna(row["orden"]) else None
+                raw_ord = row["orden"]
+                ord_str = str(raw_ord).strip() if pd.notna(raw_ord) else ""
+                orden_val = ord_str if ord_str and ord_str != "0" else ""
             else:
-                lot = str(row.get("lot_esc", ""))
-                orden_val = lot if lot else None
+                lot_raw2 = str(row.get("lot_esc", "")).strip()
+                orden_val = lot_raw2 if lot_raw2 and lot_raw2 != "0" else ""
 
             # tipo_envio: PAQUETES en n_servicio → paquete; iMile siempre paquete; resto sobre
             if tiene_n_servicio:
