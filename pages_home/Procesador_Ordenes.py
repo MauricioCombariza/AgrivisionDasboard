@@ -1131,10 +1131,14 @@ with tab4:
                                 if v.get('nombre')
                             }
 
+                            # Normalizar claves del mapeo para evitar fallos por espacios
+                            mapeo_da_norm = {k.strip(): v for k, v in mapeo_da.items()}
+
                             def resolver_da(nombre_da):
-                                if nombre_da in mapeo_da:
-                                    return mapeo_da[nombre_da]
-                                return personal_por_nombre.get(str(nombre_da).upper().strip(), '')
+                                key = str(nombre_da).strip()
+                                if key in mapeo_da_norm:
+                                    return mapeo_da_norm[key]
+                                return personal_por_nombre.get(key.upper(), '')
 
                             df['cod_men'] = df['DA'].apply(resolver_da).fillna('')
 
