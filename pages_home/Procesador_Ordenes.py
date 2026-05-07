@@ -129,6 +129,58 @@ def _cargar_personal_sg(conn):
     return result
 
 
+def _cargar_clientes_sg(conn):
+    """Retorna {nombre_lower: cliente_id}"""
+    try:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT id, nombre_empresa FROM clientes WHERE activo = TRUE")
+        result = {r['nombre_empresa'].strip().lower(): r['id'] for r in cursor.fetchall()}
+        cursor.close()
+        return result
+    except Exception:
+        return {}
+
+
+def _sync_ordenes(ordenes_data: dict, conn, dict_clientes: dict):
+    """Upsert en ordenes a partir del dict acumulado durante inserción de seriales."""
+    if not ordenes_data:
+        return
+    cursor = conn.cursor()
+    for numero_orden, data in ordenes_data.items():
+        try:
+            cliente_id = dict_clientes.get(data['cliente'].lower().strip())
+            if not cliente_id:
+                continue
+            c_local = data['local']
+            c_nac   = data['nac']
+            v_total = data['valor']
+            cursor.execute("SELECT id FROM ordenes WHERE numero_orden = %s", (numero_orden,))
+            row = cursor.fetchone()
+            if row:
+                cursor.execute("""
+                    UPDATE ordenes
+                    SET cantidad_local             = %s,
+                        cantidad_nacional          = %s,
+                        cantidad_recibido_local    = %s,
+                        cantidad_recibido_nacional = %s,
+                        valor_total               = %s
+                    WHERE id = %s
+                """, (c_local, c_nac, c_local, c_nac, v_total, row[0]))
+            else:
+                cursor.execute("""
+                    INSERT INTO ordenes
+                        (numero_orden, cliente_id, fecha_recepcion, tipo_servicio,
+                         cantidad_local, cantidad_nacional,
+                         cantidad_recibido_local, cantidad_recibido_nacional,
+                         valor_total, estado)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'activa')
+                """, (numero_orden, cliente_id, data['fecha_recepcion'],
+                      data['tipo_servicio'], c_local, c_nac, c_local, c_nac, v_total))
+        except Exception:
+            pass
+    cursor.close()
+
+
 def _cargar_mapeo_da(conn):
     """mapeo_da: {nombre_da: cod_mensajero}"""
     try:
@@ -142,10 +194,11 @@ def _cargar_mapeo_da(conn):
 
 
 def _insertar_seriales_gestion_proc(df_seriales, conn, precios_men, precios_cli, personal):
-    """Escribe una fila en seriales_gestion por cada serial de mayo 2026+.
+    """Escribe una fila en seriales_gestion por cada serial de mayo 2026+
+    y sincroniza automáticamente la tabla ordenes.
 
     Requiere columnas: serial, f_esc, lot_esc, cod_men, no_entidad, estado_item.
-    Opcionales: orden, n_servicio (para tipo_envio y precio correcto).
+    Opcionales: f_emi, orden, n_servicio, ciudad1.
     """
     # Corte por f_emi (fecha emisión); si no está disponible usa f_esc.
     if 'f_emi' in df_seriales.columns:
@@ -162,11 +215,15 @@ def _insertar_seriales_gestion_proc(df_seriales, conn, precios_men, precios_cli,
     if df_may.empty:
         return 0
 
-    tiene_orden       = 'orden' in df_may.columns
-    tiene_n_servicio  = 'n_servicio' in df_may.columns
+    tiene_orden      = 'orden' in df_may.columns
+    tiene_n_servicio = 'n_servicio' in df_may.columns
+    tiene_f_emi      = 'f_emi' in df_may.columns
+    tiene_ciudad     = 'ciudad1' in df_may.columns
 
     cursor = conn.cursor()
-    insertados = 0
+    insertados  = 0
+    ordenes_acc = {}
+
     for _, row in df_may.iterrows():
         try:
             serial    = str(row['serial']).strip()
@@ -217,8 +274,36 @@ def _insertar_seriales_gestion_proc(df_seriales, conn, precios_men, precios_cli,
                   cliente, tipo_gestion, tipo_envio, precio_cli, precio_men))
             if cursor.rowcount > 0:
                 insertados += 1
+
+            # Acumular datos para sincronizar ordenes
+            if orden_val:
+                es_local = (
+                    'bog' in str(row.get('ciudad1', '')).lower()
+                    if tiene_ciudad else True
+                )
+                fecha_rec = str(row['f_emi']).replace('.', '-') if tiene_f_emi else fecha_esc
+                if orden_val not in ordenes_acc:
+                    ordenes_acc[orden_val] = {
+                        'cliente': cliente,
+                        'fecha_recepcion': fecha_rec,
+                        'tipo_servicio': tipo_envio,
+                        'local': 0, 'nac': 0, 'valor': 0.0,
+                    }
+                if es_local:
+                    ordenes_acc[orden_val]['local'] += 1
+                else:
+                    ordenes_acc[orden_val]['nac'] += 1
+                ordenes_acc[orden_val]['valor'] += precio_cli
+
         except Exception:
             pass
+
+    # Sincronizar ordenes
+    try:
+        _sync_ordenes(ordenes_acc, conn, _cargar_clientes_sg(conn))
+    except Exception:
+        pass
+
     conn.commit()
     cursor.close()
     return insertados
