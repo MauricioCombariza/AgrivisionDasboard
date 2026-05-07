@@ -313,7 +313,7 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
             # Si lot_esc está vacío para un mensajero, usar planilla de histo como respaldo.
             if cod_men in COURIER_EXTERNOS_SET and tiene_planilla_col:
                 raw_p    = row["planilla"]
-                planilla = str(raw_p).strip() if pd.notna(raw_p) and str(raw_p).strip() else "SIN NUMERO"
+                planilla = str(raw_p).strip() if pd.notna(raw_p) and str(raw_p).strip() else ""
             else:
                 lot_raw = str(row.get("lot_esc", "")).strip()
                 try:
@@ -333,10 +333,10 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
             if tiene_orden:
                 raw_ord = row["orden"]
                 ord_str = str(raw_ord).strip() if pd.notna(raw_ord) else ""
-                orden_val = ord_str if ord_str and ord_str != "0" else None
+                orden_val = ord_str if ord_str and ord_str != "0" else ""
             else:
                 lot_raw2 = str(row.get("lot_esc", "")).strip()
-                orden_val = lot_raw2 if lot_raw2 and lot_raw2 != "0" else None
+                orden_val = lot_raw2 if lot_raw2 and lot_raw2 != "0" else ""
 
             # tipo_envio: PAQUETES en n_servicio → paquete; iMile siempre paquete; resto sobre
             if tiene_n_servicio:

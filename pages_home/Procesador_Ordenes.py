@@ -178,9 +178,9 @@ def _insertar_seriales_gestion_proc(df_seriales, conn, precios_men, precios_cli,
                 planilla = ""
             if tiene_orden and pd.notna(row.get('orden')):
                 ord_str = str(row['orden']).strip()
-                orden_val = ord_str if ord_str and ord_str != "0" else None
+                orden_val = ord_str if ord_str and ord_str != "0" else ""
             else:
-                orden_val = None
+                orden_val = ""
             cod_men      = str(row.get('cod_men', '')).zfill(4)
             cliente      = str(row.get('no_entidad', '')).strip()
             estado_it    = str(row['estado_item'])
