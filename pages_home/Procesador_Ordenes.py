@@ -169,13 +169,7 @@ def _insertar_seriales_gestion_proc(df_seriales, conn, precios_men, precios_cli,
                 lot_int = str(int(float(lot_raw))) if lot_raw else ""
             except (ValueError, OverflowError):
                 lot_int = lot_raw
-            if lot_int and lot_int != "0":
-                planilla = lot_int
-            elif 'planilla' in df_may.columns:
-                raw_p = row.get('planilla', '')
-                planilla = str(raw_p).strip() if pd.notna(raw_p) and str(raw_p).strip() else ""
-            else:
-                planilla = ""
+            planilla = lot_int if lot_int and lot_int != "0" else ""
             if tiene_orden and pd.notna(row.get('orden')):
                 ord_str = str(row['orden']).strip()
                 orden_val = ord_str if ord_str and ord_str != "0" else ""

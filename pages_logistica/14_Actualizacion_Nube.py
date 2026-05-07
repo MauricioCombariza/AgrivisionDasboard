@@ -320,13 +320,7 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
                     lot_int = str(int(float(lot_raw))) if lot_raw else ""
                 except (ValueError, OverflowError):
                     lot_int = lot_raw
-                if lot_int and lot_int != "0":
-                    planilla = lot_int
-                elif tiene_planilla_col:
-                    raw_p = row["planilla"]
-                    planilla = str(raw_p).strip() if pd.notna(raw_p) and str(raw_p).strip() else ""
-                else:
-                    planilla = ""
+                planilla = lot_int if lot_int and lot_int != "0" else ""
 
             # orden: campo orden de histo; iMile usa lot_esc.
             # Tratar "0" (fillna(0) en agrupacion) como ausente.
