@@ -1142,16 +1142,20 @@ with tab4:
                             if len(das_sin_mapeo) > 0:
                                 st.warning(f"DAs sin mapeo: {list(das_sin_mapeo)} — registrados con cod_men vacío")
 
-                            # 3. Agrupar por fecha → ordenes
-                            df_new = df.groupby('fecha_recepcion')['Waybill No.'].count().reset_index()
-                            df_new.columns = ['fecha_recepcion', 'cantidad_local']
-                            df_new['orden']           = df_new['fecha_recepcion'].apply(lambda x: "IM" + x.strftime('%Y%m%d'))
-                            df_new['nombre_cliente']  = 'Imile SAS'
-                            df_new['tipo_servicio']   = 'paquete'
-                            df_new['cantidad_nacional'] = 0
-
-                            df_final = df_new[['orden', 'fecha_recepcion', 'nombre_cliente',
-                                               'tipo_servicio', 'cantidad_local', 'cantidad_nacional']]
+                            # 3. Una fila por serial — formato compatible con 3_Ordenes.py
+                            df_final = df[['Waybill No.', 'fecha_recepcion', 'lot_esc']].copy()
+                            df_final = df_final.rename(columns={'Waybill No.': 'serial'})
+                            df_final['orden']          = df_final['lot_esc']   # "IM" + fecha
+                            df_final['nombre_cliente'] = 'Imile SAS'
+                            df_final['tipo_servicio']  = 'paquete'
+                            df_final['ambito']         = 'bogota'
+                            df_final['serial']         = df_final['serial'].astype(str)
+                            df_final = (
+                                df_final[['orden', 'serial', 'fecha_recepcion',
+                                          'nombre_cliente', 'tipo_servicio', 'ambito']]
+                                .dropna(subset=['serial'])
+                                .drop_duplicates(subset=['serial'])
+                            )
                             st.session_state['df_imile_procesado'] = df_final
 
                             # 4. Registrar seriales individuales en seriales_gestion (mayo 2026+)
@@ -1175,15 +1179,15 @@ with tab4:
                                 if conn_da:
                                     conn_da.close()
 
-                            st.success(f"✅ Procesamiento completado: {len(df_final)} días / {len(df)} seriales")
+                            st.success(f"✅ Procesamiento completado: {len(df_final)} seriales / {df_final['orden'].nunique()} días")
 
                             col1, col2, col3 = st.columns(3)
                             with col1:
                                 st.metric("Seriales originales", len(df))
                             with col2:
-                                st.metric("Días procesados", len(df_final))
+                                st.metric("Seriales únicos", len(df_final))
                             with col3:
-                                st.metric("Total paquetes", df_final['cantidad_local'].sum())
+                                st.metric("Días (órdenes IM)", df_final['orden'].nunique())
 
                             st.markdown("### 📊 Vista Previa del Resultado")
                             st.dataframe(df_final, use_container_width=True, hide_index=True)
@@ -1219,16 +1223,15 @@ with tab4:
             )
 
         with col2:
-            st.metric("Registros", len(df_imile))
+            st.metric("Seriales", len(df_imile))
 
         with col3:
-            st.metric("Total Paquetes", df_imile['cantidad_local'].sum())
+            st.metric("Órdenes IM", df_imile['orden'].nunique())
 
         st.info("""
             💡 **Archivo listo para descargar:**
-            - El archivo contiene las columnas: orden, fecha_recepcion, nombre_cliente, tipo_servicio, cantidad_local, cantidad_nacional
-            - Formato CSV (.csv)
-            - Listo para carga masiva
+            - Columnas: orden, serial, fecha_recepcion, nombre_cliente, tipo_servicio, ambito
+            - Una fila por serial — compatible con Carga Masiva CSV en Órdenes
         """)
 
 # ==============================================================================
