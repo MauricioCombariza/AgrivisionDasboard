@@ -32,6 +32,106 @@ def _conectar_bases_web():
         st.warning(f"No se pudo conectar a bases_web: {e}")
         return None
 
+
+# seriales_gestion cubre mayo 2026 en adelante (por f_emi)
+_CORTE_SG = date(2026, 5, 1)
+
+
+def _sg_as_gm(cursor, cod_mensajero, fecha_desde, fecha_hasta):
+    """Consulta seriales_gestion agrupada por planilla/mensajero, con la misma forma
+    de diccionario que gestiones_mensajero. Retorna lista de dicts con _source='sg'."""
+    base_select = """
+        SELECT
+            NULL                        AS id,
+            sg.planilla                 AS planilla,
+            MIN(sg.fecha_escaner)       AS f_esc,
+            COUNT(*)                    AS cantidad_seriales,
+            AVG(sg.precio_mensajero)    AS precio,
+            SUM(sg.precio_mensajero)    AS valor_total,
+            sg.cliente,
+            sg.tipo_gestion,
+            sg.orden,
+            sg.cod_men                  AS cod_mensajero,
+            0                           AS editado_manualmente
+        FROM seriales_gestion sg
+        WHERE DATE(sg.fecha_escaner) BETWEEN %s AND %s
+          AND sg.planilla != ''
+    """
+    if cod_mensajero == "TODOS":
+        cursor.execute(
+            base_select + " GROUP BY sg.planilla, sg.cod_men, sg.cliente, sg.tipo_gestion, sg.orden"
+                          " ORDER BY sg.cod_men ASC, sg.planilla ASC",
+            (fecha_desde, fecha_hasta),
+        )
+    else:
+        cursor.execute(
+            base_select + " AND sg.cod_men = %s"
+                          " GROUP BY sg.planilla, sg.cod_men, sg.cliente, sg.tipo_gestion, sg.orden"
+                          " ORDER BY sg.planilla ASC",
+            (fecha_desde, fecha_hasta, cod_mensajero),
+        )
+    rows = cursor.fetchall()
+    for r in rows:
+        r["_source"] = "sg"
+    return rows
+
+
+def _gm_as_gm(cursor, cod_mensajero, fecha_desde, fecha_hasta):
+    """Consulta gestiones_mensajero con la misma forma de diccionario. _source='gm'."""
+    if cod_mensajero == "TODOS":
+        cursor.execute("""
+            SELECT
+                gm.id,
+                gm.lot_esc          AS planilla,
+                gm.fecha_escaner    AS f_esc,
+                gm.total_seriales   AS cantidad_seriales,
+                gm.valor_unitario   AS precio,
+                gm.valor_total,
+                gm.cliente,
+                gm.tipo_gestion,
+                gm.orden,
+                gm.cod_mensajero,
+                gm.editado_manualmente
+            FROM gestiones_mensajero gm
+            WHERE DATE(gm.fecha_escaner) BETWEEN %s AND %s
+            ORDER BY gm.cod_mensajero ASC, gm.lot_esc ASC, gm.fecha_escaner ASC
+        """, (fecha_desde, fecha_hasta))
+    else:
+        cursor.execute("""
+            SELECT
+                gm.id,
+                gm.lot_esc          AS planilla,
+                gm.fecha_escaner    AS f_esc,
+                gm.total_seriales   AS cantidad_seriales,
+                gm.valor_unitario   AS precio,
+                gm.valor_total,
+                gm.cliente,
+                gm.tipo_gestion,
+                gm.orden,
+                gm.editado_manualmente
+            FROM gestiones_mensajero gm
+            WHERE gm.cod_mensajero = %s
+              AND DATE(gm.fecha_escaner) BETWEEN %s AND %s
+            ORDER BY gm.lot_esc ASC, gm.fecha_escaner ASC
+        """, (cod_mensajero, fecha_desde, fecha_hasta))
+    rows = cursor.fetchall()
+    for r in rows:
+        r["_source"] = "gm"
+    return rows
+
+
+def _cargar_planillas(cursor, cod_mensajero, fecha_desde, fecha_hasta):
+    """Combina gestiones_mensajero (< mayo 2026) y seriales_gestion (>= mayo 2026)."""
+    rows = []
+    if fecha_desde < _CORTE_SG:
+        hasta_gm = min(fecha_hasta, date(2026, 4, 30))
+        rows += _gm_as_gm(cursor, cod_mensajero, fecha_desde, hasta_gm)
+    if fecha_hasta >= _CORTE_SG:
+        desde_sg = max(fecha_desde, _CORTE_SG)
+        rows += _sg_as_gm(cursor, cod_mensajero, desde_sg, fecha_hasta)
+    return rows
+
+
 st.title("📑 Planillas Mensajeros Check")
 
 conn = conectar_logistica()
@@ -113,7 +213,7 @@ try:
         if btn_buscar and numero_planilla_buscar:
             # Forzar nueva transaccion para ver cambios recientes
             conn.commit()
-            # Buscar la planilla en la base de datos
+            # Buscar primero en gestiones_mensajero (pre-mayo 2026)
             cursor.execute("""
                 SELECT
                     gm.id,
@@ -137,11 +237,45 @@ try:
                 ORDER BY gm.fecha_escaner ASC
             """, (numero_planilla_buscar,))
             resultados_busqueda = cursor.fetchall()
+            _busq_source = "gm"
+            for r in resultados_busqueda:
+                r["_source"] = "gm"
+
+            # Si no está en gestiones_mensajero, buscar en seriales_gestion (mayo 2026+)
+            if not resultados_busqueda:
+                cursor.execute("""
+                    SELECT
+                        NULL                        AS id,
+                        sg.planilla,
+                        MIN(sg.fecha_escaner)       AS f_esc,
+                        COUNT(*)                    AS cantidad_seriales,
+                        AVG(sg.precio_mensajero)    AS precio,
+                        SUM(sg.precio_mensajero)    AS valor_total,
+                        sg.cod_men                  AS cod_mensajero,
+                        sg.cliente,
+                        sg.tipo_gestion,
+                        sg.orden,
+                        0                           AS editado_manualmente,
+                        p.nombre_completo           AS nombre_mensajero,
+                        p.tipo_personal,
+                        p.tarifa_entrega_local      AS precio_local,
+                        p.tarifa_entrega_nacional   AS precio_nacional
+                    FROM seriales_gestion sg
+                    LEFT JOIN personal p ON sg.cod_men = p.codigo
+                    WHERE sg.planilla = %s AND sg.planilla != ''
+                    GROUP BY sg.planilla, sg.cod_men, sg.cliente, sg.tipo_gestion, sg.orden
+                    ORDER BY f_esc ASC
+                """, (numero_planilla_buscar,))
+                resultados_busqueda = cursor.fetchall()
+                _busq_source = "sg"
+                for r in resultados_busqueda:
+                    r["_source"] = "sg"
 
             if resultados_busqueda:
                 st.session_state.planilla_buscada = {
                     'numero': numero_planilla_buscar,
-                    'registros': resultados_busqueda
+                    'registros': resultados_busqueda,
+                    'source': _busq_source,
                 }
             else:
                 st.session_state.planilla_buscada = None
@@ -151,6 +285,7 @@ try:
         if st.session_state.planilla_buscada:
             registros = st.session_state.planilla_buscada['registros']
             num_planilla = st.session_state.planilla_buscada['numero']
+            _busq_src = st.session_state.planilla_buscada.get('source', 'gm')
 
             _is_rev_busq = num_planilla in planillas_revisadas_set
             col_hdr1, col_hdr2 = st.columns([3, 1])
@@ -322,8 +457,6 @@ try:
                     if st.button("Aplicar a toda la planilla", type="primary", key="btn_cambiar_men_planilla"):
                         try:
                             cursor_upd = conn.cursor(dictionary=True)
-
-                            # Obtener mensajero_id del nuevo codigo para actualizar la FK
                             cursor_upd.execute(
                                 "SELECT id FROM personal WHERE codigo = %s LIMIT 1",
                                 (nuevo_cod_planilla,)
@@ -331,73 +464,66 @@ try:
                             _men_row = cursor_upd.fetchone()
                             nuevo_men_id = _men_row['id'] if _men_row else None
 
-                            ids_planilla = df_busq['id'].tolist()
-                            actualizados = 0
-                            fusionados = 0
-                            eliminados_ids = []
+                            if _busq_src == "sg":
+                                # seriales_gestion: actualizar directamente por planilla
+                                viejos_cods = df_busq['cod_mensajero'].unique().tolist()
+                                _ph = ','.join(['%s'] * len(viejos_cods))
+                                cursor_upd.execute(
+                                    f"UPDATE seriales_gestion SET cod_men = %s, mensajero_id = %s"
+                                    f" WHERE planilla = %s AND cod_men IN ({_ph})",
+                                    [nuevo_cod_planilla, nuevo_men_id, num_planilla] + viejos_cods
+                                )
+                                actualizados = cursor_upd.rowcount
+                                fusionados = 0
+                            else:
+                                ids_planilla = df_busq['id'].tolist()
+                                actualizados = 0
+                                fusionados = 0
+                                eliminados_ids = []
 
-                            for gestion_id in ids_planilla:
-                                # Saltar si ya fue eliminado por fusion
-                                if gestion_id in eliminados_ids:
-                                    continue
-
-                                # Obtener datos del registro actual
-                                cursor_upd.execute("""
-                                    SELECT id, lot_esc, orden, tipo_gestion, cliente, cod_mensajero,
-                                           total_seriales, valor_unitario, valor_total, editado_manualmente
-                                    FROM gestiones_mensajero WHERE id = %s
-                                """, (gestion_id,))
-                                reg = cursor_upd.fetchone()
-
-                                if not reg or reg['cod_mensajero'] == nuevo_cod_planilla:
-                                    continue
-
-                                # Verificar si ya existe un registro con el nuevo mensajero
-                                cursor_upd.execute("""
-                                    SELECT id, total_seriales, valor_unitario, valor_total
-                                    FROM gestiones_mensajero
-                                    WHERE lot_esc = %s AND orden = %s AND tipo_gestion = %s
-                                    AND cliente = %s AND cod_mensajero = %s AND id != %s
-                                """, (reg['lot_esc'], reg['orden'], reg['tipo_gestion'],
-                                      reg['cliente'], nuevo_cod_planilla, gestion_id))
-
-                                existente = cursor_upd.fetchone()
-
-                                if existente:
-                                    # Fusionar: sumar seriales al registro existente y bloquearlo
-                                    nuevos_seriales = existente['total_seriales'] + reg['total_seriales']
-                                    nuevo_valor = nuevos_seriales * float(existente['valor_unitario'])
-
+                                for gestion_id in ids_planilla:
+                                    if gestion_id in eliminados_ids:
+                                        continue
                                     cursor_upd.execute("""
-                                        UPDATE gestiones_mensajero
-                                        SET total_seriales = %s, valor_total = %s,
-                                            editado_manualmente = 1
-                                        WHERE id = %s
-                                    """, (nuevos_seriales, nuevo_valor, existente['id']))
-
-                                    # Eliminar el registro duplicado
-                                    cursor_upd.execute("""
-                                        DELETE FROM gestiones_mensajero WHERE id = %s
+                                        SELECT id, lot_esc, orden, tipo_gestion, cliente, cod_mensajero,
+                                               total_seriales, valor_unitario, valor_total, editado_manualmente
+                                        FROM gestiones_mensajero WHERE id = %s
                                     """, (gestion_id,))
-
-                                    eliminados_ids.append(gestion_id)
-                                    fusionados += 1
-                                else:
-                                    # No hay duplicado, reasignar mensajero y bloquear
+                                    reg = cursor_upd.fetchone()
+                                    if not reg or reg['cod_mensajero'] == nuevo_cod_planilla:
+                                        continue
                                     cursor_upd.execute("""
-                                        UPDATE gestiones_mensajero
-                                        SET cod_mensajero = %s, mensajero_id = %s,
-                                            editado_manualmente = 1
-                                        WHERE id = %s
-                                    """, (nuevo_cod_planilla, nuevo_men_id, gestion_id))
-                                    actualizados += 1
+                                        SELECT id, total_seriales, valor_unitario, valor_total
+                                        FROM gestiones_mensajero
+                                        WHERE lot_esc = %s AND orden = %s AND tipo_gestion = %s
+                                        AND cliente = %s AND cod_mensajero = %s AND id != %s
+                                    """, (reg['lot_esc'], reg['orden'], reg['tipo_gestion'],
+                                          reg['cliente'], nuevo_cod_planilla, gestion_id))
+                                    existente = cursor_upd.fetchone()
+                                    if existente:
+                                        nuevos_seriales = existente['total_seriales'] + reg['total_seriales']
+                                        nuevo_valor = nuevos_seriales * float(existente['valor_unitario'])
+                                        cursor_upd.execute("""
+                                            UPDATE gestiones_mensajero
+                                            SET total_seriales = %s, valor_total = %s, editado_manualmente = 1
+                                            WHERE id = %s
+                                        """, (nuevos_seriales, nuevo_valor, existente['id']))
+                                        cursor_upd.execute("DELETE FROM gestiones_mensajero WHERE id = %s", (gestion_id,))
+                                        eliminados_ids.append(gestion_id)
+                                        fusionados += 1
+                                    else:
+                                        cursor_upd.execute("""
+                                            UPDATE gestiones_mensajero
+                                            SET cod_mensajero = %s, mensajero_id = %s, editado_manualmente = 1
+                                            WHERE id = %s
+                                        """, (nuevo_cod_planilla, nuevo_men_id, gestion_id))
+                                        actualizados += 1
 
-                            # Marcar la planilla como revisada para que sync no reinserte
-                            cursor_upd.execute("""
-                                INSERT IGNORE INTO planillas_revisadas (lot_esc, fecha_revision)
-                                VALUES (%s, CURDATE())
-                            """, (num_planilla,))
-                            planillas_revisadas_set.add(num_planilla)
+                                cursor_upd.execute("""
+                                    INSERT IGNORE INTO planillas_revisadas (lot_esc, fecha_revision)
+                                    VALUES (%s, CURDATE())
+                                """, (num_planilla,))
+                                planillas_revisadas_set.add(num_planilla)
 
                             conn.commit()
                             cursor_upd.close()
@@ -406,12 +532,9 @@ try:
                             if actualizados > 0:
                                 msg += f"{actualizados} registro(s) reasignados"
                             if fusionados > 0:
-                                if actualizados > 0:
-                                    msg += f", "
-                                msg += f"{fusionados} registro(s) fusionados"
-                            msg += f" a mensajero {nuevo_cod_planilla} — planilla bloqueada ✅"
+                                msg += f"{', ' if actualizados else ''}{fusionados} fusionados"
+                            msg += f" a mensajero {nuevo_cod_planilla} ✅"
                             st.success(msg)
-
                             st.session_state.planilla_buscada = None
                             st.rerun()
                         except Exception as e:
@@ -477,21 +600,28 @@ try:
                                  help="Planilla marcada — precios bloqueados" if _planilla_marcada else None):
                         try:
                             _cur_tar = conn.cursor()
-                            _total_gm_ser = df_busq['cantidad_seriales'].astype(int).sum()
-                            for _, _gm in df_busq.iterrows():
-                                _ser   = int(_gm['cantidad_seriales'])
-                                _val   = _ser * precio_local_edit
+                            if _busq_src == "sg":
                                 _cur_tar.execute(
-                                    """UPDATE gestiones_mensajero
-                                       SET valor_unitario=%s, valor_total=%s, editado_manualmente=1
-                                       WHERE id=%s""",
-                                    (precio_local_edit, _val, int(_gm['id']))
+                                    "UPDATE seriales_gestion SET precio_mensajero = %s"
+                                    " WHERE planilla = %s",
+                                    (precio_local_edit, num_planilla)
                                 )
+                            else:
+                                for _, _gm in df_busq.iterrows():
+                                    _ser = int(_gm['cantidad_seriales'])
+                                    _val = _ser * precio_local_edit
+                                    _cur_tar.execute(
+                                        "UPDATE gestiones_mensajero"
+                                        " SET valor_unitario=%s, valor_total=%s, editado_manualmente=1"
+                                        " WHERE id=%s",
+                                        (precio_local_edit, _val, int(_gm['id']))
+                                    )
                             conn.commit()
                             _cur_tar.close()
+                            _total_ser = df_busq['cantidad_seriales'].astype(int).sum()
                             st.success(
                                 f"✅ Planilla actualizada — Tarifa: ${precio_local_edit:,.0f}/serial | "
-                                f"Total: ${sum(int(r['cantidad_seriales']) * precio_local_edit for _, r in df_busq.iterrows()):,.0f}"
+                                f"Total: ${_total_ser * precio_local_edit:,.0f}"
                             )
                             st.rerun()
                         except Exception as e:
@@ -604,68 +734,60 @@ try:
                                     ON DUPLICATE KEY UPDATE tipo = VALUES(tipo), fecha_mod = CURDATE()
                                 """, (cr['Ciudad'], cr['Tipo']))
 
-                            # 2. Distribuir total_val (calculado desde histo+clasificación de ciudades)
-                            #    de forma proporcional entre las gestiones de la planilla.
-                            #
-                            #    gestiones_mensajero infla el conteo (~2×) porque el mismo serial
-                            #    aparece en múltiples tipo_gestion.  La distribución proporcional
-                            #    garantiza que la suma de valor_total en BD sea exactamente total_val.
-                            #
-                            #    valor_unitario se calcula como total_val / seriales_histo (no sobre
-                            #    gestiones) para que refleje la tarifa real del courier ($990, no $498).
-                            _total_gm_seriales    = df_busq['cantidad_seriales'].astype(int).sum()
-                            _total_histo_seriales = total_loc + total_nac
-                            _precio_unit_histo    = total_val / _total_histo_seriales if _total_histo_seriales > 0 else 0.0
+                            if _busq_src == "sg":
+                                # seriales_gestion: actualizar precio_mensajero por serial
+                                # uniendo con histo para saber la ciudad de cada serial
+                                _conn_bw_upd = _conectar_bases_web()
+                                if _conn_bw_upd:
+                                    try:
+                                        _cur_bw_upd = _conn_bw_upd.cursor(dictionary=True)
+                                        _cur_bw_upd.execute(f"""
+                                            SELECT h.serial,
+                                                COALESCE(NULLIF(TRIM(h.ciudad1),''),'Sin ciudad') AS ciudad
+                                            FROM histo h
+                                            WHERE (h.planilla = %s OR h.lot_esc = %s)
+                                              AND h.cod_men IN ({_ph_men_city})
+                                        """, [num_planilla, num_planilla] + _cod_men_list)
+                                        _seriales_ciudad = {r['serial']: r['ciudad'] for r in _cur_bw_upd.fetchall()}
+                                        _cur_bw_upd.close()
+                                        _conn_bw_upd.close()
+                                        for _serial, _ciudad in _seriales_ciudad.items():
+                                            _tipo_c = tipo_map.get(_ciudad, 'nacional')
+                                            _precio_c = precio_local_edit if _tipo_c == 'local' else precio_nac_edit
+                                            cursor_upd.execute(
+                                                "UPDATE seriales_gestion SET precio_mensajero = %s WHERE serial = %s AND planilla = %s",
+                                                (_precio_c, _serial, num_planilla)
+                                            )
+                                    except Exception:
+                                        # fallback: precio plano
+                                        cursor_upd.execute(
+                                            "UPDATE seriales_gestion SET precio_mensajero = %s WHERE planilla = %s",
+                                            (precio_local_edit, num_planilla)
+                                        )
+                                else:
+                                    cursor_upd.execute(
+                                        "UPDATE seriales_gestion SET precio_mensajero = %s WHERE planilla = %s",
+                                        (precio_local_edit, num_planilla)
+                                    )
+                            else:
+                                # gestiones_mensajero: distribución proporcional
+                                _total_gm_seriales    = df_busq['cantidad_seriales'].astype(int).sum()
+                                _total_histo_seriales = total_loc + total_nac
+                                _precio_unit_histo    = total_val / _total_histo_seriales if _total_histo_seriales > 0 else 0.0
 
-                            for _, gm_row in df_busq.iterrows():
-                                gestion_id = int(gm_row['id'])
-                                total_ser  = int(gm_row['cantidad_seriales'])
-
-                                prop_reg    = total_ser / _total_gm_seriales if _total_gm_seriales > 0 else 0.0
-                                nuevo_valor = prop_reg * total_val
-                                precio_unit = _precio_unit_histo  # tarifa real desde histo, no inflada por gestiones
-
-                                cursor_upd.execute("""
-                                    UPDATE gestiones_mensajero
-                                    SET valor_unitario = %s, valor_total = %s, editado_manualmente = 1
-                                    WHERE id = %s
-                                """, (round(precio_unit, 2), round(nuevo_valor, 2), gestion_id))
+                                for _, gm_row in df_busq.iterrows():
+                                    gestion_id = int(gm_row['id'])
+                                    total_ser  = int(gm_row['cantidad_seriales'])
+                                    prop_reg   = total_ser / _total_gm_seriales if _total_gm_seriales > 0 else 0.0
+                                    nuevo_valor = prop_reg * total_val
+                                    cursor_upd.execute("""
+                                        UPDATE gestiones_mensajero
+                                        SET valor_unitario = %s, valor_total = %s, editado_manualmente = 1
+                                        WHERE id = %s
+                                    """, (round(_precio_unit_histo, 2), round(nuevo_valor, 2), gestion_id))
 
                             conn.commit()
                             cursor_upd.close()
-
-                            # Refrescar planilla_buscada con los valores recién guardados para
-                            # que la línea "Valor: $..." muestre el total correcto sin re-buscar.
-                            _cur_rf = conn.cursor(dictionary=True)
-                            _cur_rf.execute("""
-                                SELECT
-                                    gm.id,
-                                    gm.lot_esc as planilla,
-                                    gm.fecha_escaner as f_esc,
-                                    gm.total_seriales as cantidad_seriales,
-                                    gm.valor_unitario as precio,
-                                    gm.valor_total,
-                                    gm.cod_mensajero,
-                                    gm.cliente,
-                                    gm.tipo_gestion,
-                                    gm.orden,
-                                    gm.editado_manualmente,
-                                    p.nombre_completo as nombre_mensajero,
-                                    p.tipo_personal,
-                                    p.tarifa_entrega_local   AS precio_local,
-                                    p.tarifa_entrega_nacional AS precio_nacional
-                                FROM gestiones_mensajero gm
-                                LEFT JOIN personal p ON gm.cod_mensajero = p.codigo
-                                WHERE gm.lot_esc = %s
-                                ORDER BY gm.fecha_escaner ASC
-                            """, (num_planilla,))
-                            _registros_frescos = _cur_rf.fetchall()
-                            _cur_rf.close()
-                            if _registros_frescos:
-                                st.session_state.planilla_buscada = {
-                                    'numero': num_planilla,
-                                    'registros': _registros_frescos,
-                                }
 
                             st.success(f"✅ Precios actualizados por ciudad — Total planilla: ${total_val:,.0f}")
                             st.rerun()
@@ -710,28 +832,32 @@ try:
                                      help="Planilla marcada — precios bloqueados" if _planilla_marcada else None):
                             try:
                                 cursor_upd = conn.cursor()
-                                ids_planilla = df_busq['id'].tolist()
-                                actualizados_precio = 0
-
-                                for gestion_id in ids_planilla:
+                                if _busq_src == "sg":
                                     cursor_upd.execute(
-                                        "SELECT total_seriales FROM gestiones_mensajero WHERE id = %s",
-                                        (gestion_id,)
+                                        "UPDATE seriales_gestion SET precio_mensajero = %s WHERE planilla = %s",
+                                        (nuevo_precio_planilla, num_planilla)
                                     )
-                                    res = cursor_upd.fetchone()
-                                    if res:
-                                        valor_reg = res[0] * nuevo_precio_planilla
-                                        cursor_upd.execute("""
-                                            UPDATE gestiones_mensajero
-                                            SET valor_unitario = %s, valor_total = %s, editado_manualmente = 1
-                                            WHERE id = %s
-                                        """, (nuevo_precio_planilla, valor_reg, gestion_id))
-                                        actualizados_precio += 1
-
+                                    actualizados_precio = cursor_upd.rowcount
+                                else:
+                                    ids_planilla = df_busq['id'].tolist()
+                                    actualizados_precio = 0
+                                    for gestion_id in ids_planilla:
+                                        cursor_upd.execute(
+                                            "SELECT total_seriales FROM gestiones_mensajero WHERE id = %s",
+                                            (gestion_id,)
+                                        )
+                                        res = cursor_upd.fetchone()
+                                        if res:
+                                            valor_reg = res[0] * nuevo_precio_planilla
+                                            cursor_upd.execute("""
+                                                UPDATE gestiones_mensajero
+                                                SET valor_unitario = %s, valor_total = %s, editado_manualmente = 1
+                                                WHERE id = %s
+                                            """, (nuevo_precio_planilla, valor_reg, gestion_id))
+                                            actualizados_precio += 1
                                 conn.commit()
                                 cursor_upd.close()
-                                msg_precio = f"Planilla {num_planilla}: precio actualizado a ${nuevo_precio_planilla:,.0f} en {actualizados_precio} registro(s)"
-                                st.success(msg_precio)
+                                st.success(f"Planilla {num_planilla}: precio actualizado a ${nuevo_precio_planilla:,.0f} en {actualizados_precio} registro(s)")
                                 st.session_state.planilla_buscada = None
                                 st.rerun()
                             except Exception as e:
@@ -799,7 +925,7 @@ try:
                 c7.write(fecha_str)
 
                 with c8:
-                    if is_protected:
+                    if is_protected and _busq_src == "gm":
                         if st.button("🔓", key=f"unlock_busq_{row_id}", help="Quitar protección manual"):
                             try:
                                 _cur = conn.cursor()
@@ -909,52 +1035,60 @@ try:
                     if st.button("Guardar Cambios", type="primary", key="btn_guardar_busqueda"):
                         try:
                             cursor_upd = conn.cursor()
-
                             nuevo_cod = None
                             if nuevo_mensajero_busq != "(Sin cambio)":
                                 nuevo_cod = opciones_mensajeros[nuevo_mensajero_busq]
 
-                            ids_actualizar = list(st.session_state.seleccion_registros_busq)
-
-                            for gestion_id in ids_actualizar:
-                                cursor_upd.execute(
-                                    "SELECT total_seriales FROM gestiones_mensajero WHERE id = %s",
-                                    (gestion_id,)
-                                )
-                                res = cursor_upd.fetchone()
-                                if res:
-                                    seriales_reg = res[0]
-                                    valor_reg = seriales_reg * nuevo_precio_busq
-
+                            if _busq_src == "sg":
+                                # Para sg: actualizar por planilla+cod_men de los registros seleccionados
+                                df_sel_src = pd.DataFrame(registros_seleccionados)
+                                for _cod in df_sel_src['cod_mensajero'].unique():
                                     if nuevo_cod:
-                                        cursor_upd.execute("""
-                                            UPDATE gestiones_mensajero
-                                            SET valor_unitario = %s,
-                                                valor_total = %s,
-                                                cod_mensajero = %s,
-                                                editado_manualmente = 1
-                                            WHERE id = %s
-                                        """, (nuevo_precio_busq, valor_reg, nuevo_cod, gestion_id))
+                                        cursor_upd.execute(
+                                            "UPDATE seriales_gestion SET precio_mensajero = %s, cod_men = %s"
+                                            " WHERE planilla = %s AND cod_men = %s",
+                                            (nuevo_precio_busq, nuevo_cod, num_planilla, _cod)
+                                        )
                                     else:
-                                        cursor_upd.execute("""
-                                            UPDATE gestiones_mensajero
-                                            SET valor_unitario = %s,
-                                                valor_total = %s,
-                                                editado_manualmente = 1
-                                            WHERE id = %s
-                                        """, (nuevo_precio_busq, valor_reg, gestion_id))
+                                        cursor_upd.execute(
+                                            "UPDATE seriales_gestion SET precio_mensajero = %s"
+                                            " WHERE planilla = %s AND cod_men = %s",
+                                            (nuevo_precio_busq, num_planilla, _cod)
+                                        )
+                            else:
+                                ids_actualizar = list(st.session_state.seleccion_registros_busq)
+                                for gestion_id in ids_actualizar:
+                                    cursor_upd.execute(
+                                        "SELECT total_seriales FROM gestiones_mensajero WHERE id = %s",
+                                        (gestion_id,)
+                                    )
+                                    res = cursor_upd.fetchone()
+                                    if res:
+                                        seriales_reg = res[0]
+                                        valor_reg = seriales_reg * nuevo_precio_busq
+                                        if nuevo_cod:
+                                            cursor_upd.execute("""
+                                                UPDATE gestiones_mensajero
+                                                SET valor_unitario=%s, valor_total=%s,
+                                                    cod_mensajero=%s, editado_manualmente=1
+                                                WHERE id=%s
+                                            """, (nuevo_precio_busq, valor_reg, nuevo_cod, gestion_id))
+                                        else:
+                                            cursor_upd.execute("""
+                                                UPDATE gestiones_mensajero
+                                                SET valor_unitario=%s, valor_total=%s, editado_manualmente=1
+                                                WHERE id=%s
+                                            """, (nuevo_precio_busq, valor_reg, gestion_id))
 
                             conn.commit()
                             cursor_upd.close()
-
-                            msg_exito = f"Planilla {num_planilla}: {len(ids_actualizar)} registro(s) actualizado(s)"
+                            msg_exito = f"Planilla {num_planilla}: registros actualizados"
                             if nuevo_cod:
                                 msg_exito += f" - Mensajero cambiado a {nuevo_cod}"
                             st.success(msg_exito)
                             st.session_state.seleccion_registros_busq = set()
                             st.session_state.planilla_buscada = None
                             st.rerun()
-
                         except Exception as e:
                             conn.rollback()
                             st.error(f"Error al actualizar: {e}")
@@ -1085,47 +1219,9 @@ try:
         st.markdown(f"### Mensajero: **{cod_mensajero}** - **{nombre_mensajero}**")
 
     # =====================================================
-    # CONSULTA DE PLANILLAS
+    # CONSULTA DE PLANILLAS (gestiones_mensajero < mayo 2026, seriales_gestion >= mayo 2026)
     # =====================================================
-    if cod_mensajero == "TODOS":
-        query = """
-            SELECT
-                gm.id,
-                gm.lot_esc as planilla,
-                gm.fecha_escaner as f_esc,
-                gm.total_seriales as cantidad_seriales,
-                gm.valor_unitario as precio,
-                gm.valor_total,
-                gm.cliente,
-                gm.tipo_gestion,
-                gm.orden,
-                gm.cod_mensajero,
-                gm.editado_manualmente
-            FROM gestiones_mensajero gm
-            WHERE DATE(gm.fecha_escaner) BETWEEN %s AND %s
-            ORDER BY gm.cod_mensajero ASC, gm.lot_esc ASC, gm.fecha_escaner ASC
-        """
-        cursor.execute(query, (fecha_desde, fecha_hasta))
-    else:
-        query = """
-            SELECT
-                gm.id,
-                gm.lot_esc as planilla,
-                gm.fecha_escaner as f_esc,
-                gm.total_seriales as cantidad_seriales,
-                gm.valor_unitario as precio,
-                gm.valor_total,
-                gm.cliente,
-                gm.tipo_gestion,
-                gm.orden,
-                gm.editado_manualmente
-            FROM gestiones_mensajero gm
-            WHERE gm.cod_mensajero = %s
-            AND DATE(gm.fecha_escaner) BETWEEN %s AND %s
-            ORDER BY gm.lot_esc ASC, gm.fecha_escaner ASC
-        """
-        cursor.execute(query, (cod_mensajero, fecha_desde, fecha_hasta))
-    planillas = cursor.fetchall()
+    planillas = _cargar_planillas(cursor, cod_mensajero, fecha_desde, fecha_hasta)
 
     if planillas:
         # =====================================================
@@ -1395,7 +1491,9 @@ try:
                     'cantidad_seriales': row['cantidad_seriales'],
                     'precio': row['precio'],
                     'valor_total': row['valor_total'],
-                    'ids': row['id']
+                    'ids': row['id'],
+                    '_source': row.get('_source', 'gm'),
+                    'cod_mensajero': row.get('cod_mensajero', cod_mensajero),
                 }
                 st.rerun()
 
@@ -1446,24 +1544,14 @@ try:
             planilla_edit = st.session_state.editando_planilla
 
             with st.container():
-                st.info(f"**Planilla:** {planilla_edit['planilla']} | **Registros afectados:** {len(planilla_edit['ids'])}")
+                _edit_src = planilla_edit.get('_source', 'gm')
+                _edit_cod = planilla_edit.get('cod_mensajero', '')
+                st.info(f"**Planilla:** {planilla_edit['planilla']} | **Registros afectados:** {len(planilla_edit['ids']) if isinstance(planilla_edit['ids'], list) else 1}")
+                if _edit_src == "sg":
+                    st.caption("📋 Datos de _seriales_gestion_ (mayo 2026+)")
 
                 # Obtener detalle de los registros por cliente y orden
-                ids_str = ','.join([str(id) for id in planilla_edit['ids']])
-                cursor.execute(f"""
-                    SELECT
-                        id, cliente, orden, total_seriales, valor_unitario, valor_total,
-                        editado_manualmente
-                    FROM gestiones_mensajero
-                    WHERE id IN ({ids_str})
-                    ORDER BY cliente, orden
-                """)
-                registros_detalle = cursor.fetchall()
-
-                # Mostrar detalle por cliente y orden con edicion inline
                 st.markdown("#### Detalle por Cliente y Orden")
-
-                # Encabezados
                 dh1, dh2, dh3, dh4, dh5, dh6, dh7 = st.columns([1.3, 1, 0.7, 1, 1, 0.8, 0.6])
                 dh1.write("**Cliente**")
                 dh2.write("**Orden**")
@@ -1472,8 +1560,34 @@ try:
                 dh5.write("**Nuevo Valor**")
                 dh6.write("**Guardar**")
                 dh7.write("**🔒**")
-
                 st.markdown("---")
+
+                if _edit_src == "sg":
+                    cursor.execute("""
+                        SELECT
+                            planilla, cliente, orden, cod_men,
+                            COUNT(*) AS total_seriales,
+                            AVG(precio_mensajero) AS valor_unitario,
+                            SUM(precio_mensajero) AS valor_total
+                        FROM seriales_gestion
+                        WHERE planilla = %s AND cod_men = %s
+                        GROUP BY planilla, cliente, orden, cod_men
+                        ORDER BY cliente, orden
+                    """, (planilla_edit['planilla'], _edit_cod))
+                    registros_detalle = cursor.fetchall()
+                    for reg in registros_detalle:
+                        reg['id'] = None
+                        reg['editado_manualmente'] = 0
+                else:
+                    ids_str = ','.join([str(i) for i in planilla_edit['ids']])
+                    cursor.execute(f"""
+                        SELECT id, cliente, orden, total_seriales, valor_unitario, valor_total,
+                               editado_manualmente
+                        FROM gestiones_mensajero
+                        WHERE id IN ({ids_str})
+                        ORDER BY cliente, orden
+                    """)
+                    registros_detalle = cursor.fetchall()
 
                 for reg in registros_detalle:
                     is_prot = bool(reg.get('editado_manualmente', 0))
@@ -1481,40 +1595,46 @@ try:
                     dc1.write(f"{reg['cliente'] or '-'}")
                     dc2.write(f"{reg['orden'] or '-'}")
                     dc3.write(f"{reg['total_seriales']}")
+                    _precio_actual = float(reg['valor_unitario'])
+                    _key_row = f"precio_row_{_edit_src}_{planilla_edit['planilla']}_{reg['cliente']}_{reg['orden']}"
 
                     with dc4:
                         nuevo_precio_row = st.number_input(
-                            "Precio",
-                            min_value=0.0,
-                            value=float(reg['valor_unitario']),
-                            step=50.0,
-                            key=f"precio_row_{reg['id']}",
-                            label_visibility="collapsed"
+                            "Precio", min_value=0.0, value=_precio_actual, step=50.0,
+                            key=_key_row, label_visibility="collapsed"
                         )
 
-                    # Calcular nuevo valor
                     nuevo_valor_row = reg['total_seriales'] * nuevo_precio_row
                     dc5.write(f"${nuevo_valor_row:,.0f}")
 
                     with dc6:
-                        if st.button("💾", key=f"save_row_{reg['id']}", help="Guardar este registro"):
+                        _btn_key = f"save_row_{_edit_src}_{planilla_edit['planilla']}_{reg['cliente']}_{reg['orden']}"
+                        if st.button("💾", key=_btn_key, help="Guardar este registro"):
                             try:
                                 cursor_upd = conn.cursor()
-                                cursor_upd.execute("""
-                                    UPDATE gestiones_mensajero
-                                    SET valor_unitario = %s, valor_total = %s, editado_manualmente = 1
-                                    WHERE id = %s
-                                """, (nuevo_precio_row, nuevo_valor_row, reg['id']))
+                                if _edit_src == "sg":
+                                    cursor_upd.execute(
+                                        "UPDATE seriales_gestion SET precio_mensajero = %s"
+                                        " WHERE planilla = %s AND cliente = %s AND orden = %s",
+                                        (nuevo_precio_row, planilla_edit['planilla'],
+                                         reg['cliente'], reg['orden'])
+                                    )
+                                else:
+                                    cursor_upd.execute("""
+                                        UPDATE gestiones_mensajero
+                                        SET valor_unitario = %s, valor_total = %s, editado_manualmente = 1
+                                        WHERE id = %s
+                                    """, (nuevo_precio_row, nuevo_valor_row, reg['id']))
                                 conn.commit()
                                 cursor_upd.close()
-                                st.success(f"Orden {reg['orden']} actualizada y protegida 🔒")
+                                st.success(f"Orden {reg['orden']} actualizada 💾")
                                 st.rerun()
                             except Exception as e:
                                 conn.rollback()
                                 st.error(f"Error: {e}")
 
                     with dc7:
-                        if is_prot:
+                        if is_prot and _edit_src == "gm":
                             if st.button("🔓", key=f"unlock_det_{reg['id']}", help="Quitar protección manual"):
                                 try:
                                     _cur = conn.cursor()
@@ -1531,24 +1651,25 @@ try:
                         else:
                             st.caption("—")
 
-                # Mostrar opción para desproteger toda la planilla si hay registros protegidos
-                protegidos_planilla = [r for r in registros_detalle if r.get('editado_manualmente')]
-                if protegidos_planilla:
-                    st.info(f"🔒 {len(protegidos_planilla)} registro(s) protegido(s) — las actualizaciones masivas los omitirán.")
-                    if st.button("🔓 Desproteger todos los registros de esta planilla", key="btn_desproteger_planilla"):
-                        try:
-                            _cur = conn.cursor()
-                            for r in protegidos_planilla:
-                                _cur.execute(
-                                    "UPDATE gestiones_mensajero SET editado_manualmente = 0 WHERE id = %s",
-                                    (r['id'],)
-                                )
-                            conn.commit()
-                            _cur.close()
-                            st.rerun()
-                        except Exception as e:
-                            conn.rollback()
-                            st.error(f"Error: {e}")
+                # Desproteger planilla (solo gm)
+                if _edit_src == "gm":
+                    protegidos_planilla = [r for r in registros_detalle if r.get('editado_manualmente')]
+                    if protegidos_planilla:
+                        st.info(f"🔒 {len(protegidos_planilla)} registro(s) protegido(s) — las actualizaciones masivas los omitirán.")
+                        if st.button("🔓 Desproteger todos los registros de esta planilla", key="btn_desproteger_planilla"):
+                            try:
+                                _cur = conn.cursor()
+                                for r in protegidos_planilla:
+                                    _cur.execute(
+                                        "UPDATE gestiones_mensajero SET editado_manualmente = 0 WHERE id = %s",
+                                        (r['id'],)
+                                    )
+                                conn.commit()
+                                _cur.close()
+                                st.rerun()
+                            except Exception as e:
+                                conn.rollback()
+                                st.error(f"Error: {e}")
 
                 st.markdown("---")
 
@@ -1627,43 +1748,48 @@ try:
                         if mensajero_valido:
                             try:
                                 cursor_update = conn.cursor()
-
-                                # Actualizar todos los registros de la planilla
-                                for gestion_id in planilla_edit['ids']:
-                                    # Obtener seriales de cada registro
-                                    cursor_update.execute(
-                                        "SELECT total_seriales FROM gestiones_mensajero WHERE id = %s",
-                                        (gestion_id,)
-                                    )
-                                    result = cursor_update.fetchone()
-                                    if result:
-                                        seriales_registro = result[0]
-                                        valor_registro = seriales_registro * nuevo_precio
-
-                                        # Construir query dinamico segun si cambia mensajero
-                                        if nuevo_cod_mensajero:
-                                            cursor_update.execute("""
-                                                UPDATE gestiones_mensajero
-                                                SET valor_unitario = %s,
-                                                    valor_total = %s,
-                                                    cod_mensajero = %s,
-                                                    editado_manualmente = 1
-                                                WHERE id = %s
-                                            """, (nuevo_precio, valor_registro, nuevo_cod_mensajero, gestion_id))
-                                        else:
-                                            cursor_update.execute("""
-                                                UPDATE gestiones_mensajero
-                                                SET valor_unitario = %s,
-                                                    valor_total = %s,
-                                                    editado_manualmente = 1
-                                                WHERE id = %s
-                                            """, (nuevo_precio, valor_registro, gestion_id))
+                                if _edit_src == "sg":
+                                    if nuevo_cod_mensajero:
+                                        cursor_update.execute(
+                                            "UPDATE seriales_gestion SET precio_mensajero = %s, cod_men = %s"
+                                            " WHERE planilla = %s AND cod_men = %s",
+                                            (nuevo_precio, nuevo_cod_mensajero,
+                                             planilla_edit['planilla'], _edit_cod)
+                                        )
+                                    else:
+                                        cursor_update.execute(
+                                            "UPDATE seriales_gestion SET precio_mensajero = %s"
+                                            " WHERE planilla = %s AND cod_men = %s",
+                                            (nuevo_precio, planilla_edit['planilla'], _edit_cod)
+                                        )
+                                else:
+                                    for gestion_id in planilla_edit['ids']:
+                                        cursor_update.execute(
+                                            "SELECT total_seriales FROM gestiones_mensajero WHERE id = %s",
+                                            (gestion_id,)
+                                        )
+                                        result = cursor_update.fetchone()
+                                        if result:
+                                            seriales_registro = result[0]
+                                            valor_registro = seriales_registro * nuevo_precio
+                                            if nuevo_cod_mensajero:
+                                                cursor_update.execute("""
+                                                    UPDATE gestiones_mensajero
+                                                    SET valor_unitario=%s, valor_total=%s,
+                                                        cod_mensajero=%s, editado_manualmente=1
+                                                    WHERE id=%s
+                                                """, (nuevo_precio, valor_registro, nuevo_cod_mensajero, gestion_id))
+                                            else:
+                                                cursor_update.execute("""
+                                                    UPDATE gestiones_mensajero
+                                                    SET valor_unitario=%s, valor_total=%s, editado_manualmente=1
+                                                    WHERE id=%s
+                                                """, (nuevo_precio, valor_registro, gestion_id))
 
                                 conn.commit()
                                 cursor_update.close()
-
                                 st.session_state.editando_planilla = None
-                                msg = f"Planilla {planilla_edit['planilla']} actualizada ({len(planilla_edit['ids'])} registros)"
+                                msg = f"Planilla {planilla_edit['planilla']} actualizada"
                                 if nuevo_cod_mensajero:
                                     msg += f" - Mensajero cambiado a {nuevo_cod_mensajero}"
                                 st.success(msg)
@@ -1697,15 +1823,20 @@ try:
         else:
             st.info(f"No hay planillas para el mensajero {cod_mensajero} entre {fecha_desde.strftime('%d/%m/%Y')} y {fecha_hasta.strftime('%d/%m/%Y')}")
 
-            # Mostrar fechas disponibles para este mensajero
+            # Mostrar fechas disponibles para este mensajero (ambas tablas)
             cursor.execute("""
-                SELECT DISTINCT DATE(fecha_escaner) as fecha, COUNT(*) as total
+                SELECT DISTINCT DATE(fecha_escaner) as fecha, COUNT(*) as total, 'gm' as src
                 FROM gestiones_mensajero
                 WHERE cod_mensajero = %s
                 GROUP BY DATE(fecha_escaner)
+                UNION ALL
+                SELECT DISTINCT DATE(fecha_escaner), COUNT(*), 'sg'
+                FROM seriales_gestion
+                WHERE cod_men = %s AND planilla != ''
+                GROUP BY DATE(fecha_escaner)
                 ORDER BY fecha DESC
                 LIMIT 10
-            """, (cod_mensajero,))
+            """, (cod_mensajero, cod_mensajero))
             fechas_disponibles = cursor.fetchall()
 
             if fechas_disponibles:
