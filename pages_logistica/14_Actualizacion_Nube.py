@@ -20,6 +20,7 @@ import os
 import subprocess
 import time
 import traceback
+import unicodedata
 from datetime import date as date_cls
 from pathlib import Path
 
@@ -789,14 +790,18 @@ with st.expander(
                         except Exception:
                             pass  # tabla puede no existir aún
 
-                        # Fallback: personal por nombre_completo (igual que Agrupacion_Escaner)
+                        # Fallback: personal por nombre_completo (igual que Agrupacion_Escaner).
+                        # Normaliza sin tildes para tolerar discrepancias entre Excel y BD.
+                        def _norm_name(s: str) -> str:
+                            return unicodedata.normalize("NFD", s).encode("ascii", "ignore").decode().upper().strip()
+
                         personal_por_nombre: dict = {}
                         try:
                             cur.execute(
                                 "SELECT codigo, nombre_completo FROM personal WHERE activo = TRUE"
                             )
                             personal_por_nombre = {
-                                r["nombre_completo"].upper().strip(): r["codigo"]
+                                _norm_name(r["nombre_completo"]): r["codigo"]
                                 for r in cur.fetchall()
                             }
                         except Exception:
@@ -917,7 +922,7 @@ with st.expander(
                             def _resolver_da(nombre):
                                 if nombre in mapeo_da:
                                     return mapeo_da[nombre]
-                                return personal_por_nombre.get(str(nombre).upper().strip())
+                                return personal_por_nombre.get(_norm_name(str(nombre)))
 
                             df_paq["cod_men"] = df_paq["DA"].apply(_resolver_da)
 
