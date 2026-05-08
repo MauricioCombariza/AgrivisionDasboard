@@ -1532,12 +1532,22 @@ with st.expander(
                             )
                             ext_borrados = len(_ids_borrar)
 
-                        # Dict de existentes por (cod_men, lot_esc, cliente)
-                        _gm_ext_dict = {
-                            (str(r[1]), str(r[2]), str(r[4])): {
-                                'id': r[0], 'editado': r[3]
-                            }
-                            for r in _gm_ext
+                        # Dict de existentes por (cod_men, lot_esc, cliente).
+                        # Ante colisiones de clave (varios registros con misma tupla)
+                        # preferimos el que tiene editado_manualmente=1 para no perder
+                        # la protección de candado por orden de inserción en BD.
+                        _gm_ext_dict: dict = {}
+                        for _rx in _gm_ext:
+                            _rk = (str(_rx[1]), str(_rx[2]), str(_rx[4]))
+                            if _rk not in _gm_ext_dict or (_rx[3] and not _gm_ext_dict[_rk]['editado']):
+                                _gm_ext_dict[_rk] = {'id': _rx[0], 'editado': _rx[3]}
+
+                        # Pares (cod_men, lot_esc) con al menos un registro editado
+                        # manualmente: no insertamos nuevas filas para esa planilla
+                        # aunque el nombre del cliente cambie levemente en histo.
+                        _ext_pares_candado = {
+                            (str(_rx[1]), str(_rx[2]))
+                            for _rx in _gm_ext if _rx[3]
                         }
 
                         # Insertar / actualizar desde histo
@@ -1562,7 +1572,10 @@ with st.expander(
                                         WHERE id = %s
                                     """, (_tot, _cli, _tot, _gm_ext_dict[_key]['id']))
                                     ext_actualizados += 1
-                            else:
+                            elif (_cod, _planilla) not in _ext_pares_candado:
+                                # Solo insertar si la planilla no tiene ningún registro
+                                # editado manualmente (evita duplicar con precio=0
+                                # cuando el nombre del cliente cambió en histo).
                                 cur_op.execute("""
                                     INSERT INTO gestiones_mensajero
                                     (fecha_escaner, cod_mensajero, mensajero_id,
