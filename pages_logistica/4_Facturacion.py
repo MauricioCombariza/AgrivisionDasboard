@@ -4,6 +4,7 @@ from datetime import datetime, date, timedelta
 import sys
 import os
 import io
+import mysql.connector
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.db_connection import conectar_logistica
@@ -51,7 +52,7 @@ if 'facturacion_schema_ok' not in st.session_state:
 
     st.session_state['facturacion_schema_ok'] = True
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "📄 Facturas Emitidas (Clientes)",
     "💵 Registrar Pago Recibido",
     "📊 Resumen Financiero",
@@ -59,6 +60,7 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📋 Cuentas por Pagar",
     "👷 Pago Personal",
     "💼 Adelantos Dueño",
+    "🏙️ Facturación Ciudades",
 ])
 
 with tab1:
@@ -2403,6 +2405,712 @@ with tab7:
 
     except Exception as e:
         st.error(f"Error: {e}")
+
+
+with tab8:
+    st.subheader("🏙️ Facturación Ciudades — Courier Externos")
+
+    # ── Schema: crear tablas nuevas una sola vez por sesión ───────────────────
+    if 'fc_schema_ok' not in st.session_state:
+        for _sql_fc in [
+            """CREATE TABLE IF NOT EXISTS prefacturas_courier (
+                id                INT AUTO_INCREMENT PRIMARY KEY,
+                cod_mensajero     VARCHAR(4) NOT NULL,
+                fecha_generacion  DATE NOT NULL,
+                periodo_desde     DATE,
+                periodo_hasta     DATE,
+                cantidad_planillas INT DEFAULT 0,
+                cantidad_local    INT DEFAULT 0,
+                cantidad_nacional INT DEFAULT 0,
+                valor_local       DECIMAL(15,2) DEFAULT 0,
+                valor_nacional    DECIMAL(15,2) DEFAULT 0,
+                valor_total       DECIMAL(15,2) DEFAULT 0,
+                estado            ENUM('borrador','aprobada','facturada') DEFAULT 'borrador',
+                notas             TEXT NULL,
+                created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""",
+            """CREATE TABLE IF NOT EXISTS prefactura_planillas (
+                id              INT AUTO_INCREMENT PRIMARY KEY,
+                prefactura_id   INT NOT NULL,
+                planilla        VARCHAR(50) NOT NULL,
+                fecha_escaner   DATE,
+                cantidad_local  INT DEFAULT 0,
+                cantidad_nacional INT DEFAULT 0,
+                precio_local    DECIMAL(10,2) DEFAULT 0,
+                precio_nac      DECIMAL(10,2) DEFAULT 0,
+                valor_local     DECIMAL(12,2) DEFAULT 0,
+                valor_nac       DECIMAL(12,2) DEFAULT 0,
+                valor_total     DECIMAL(12,2) DEFAULT 0,
+                FOREIGN KEY (prefactura_id) REFERENCES prefacturas_courier(id) ON DELETE CASCADE
+            )""",
+            """CREATE TABLE IF NOT EXISTS facturas_courier_cxp (
+                id                  INT AUTO_INCREMENT PRIMARY KEY,
+                prefactura_id       INT NOT NULL,
+                cod_mensajero       VARCHAR(4) NOT NULL,
+                numero_factura      VARCHAR(100) NOT NULL,
+                fecha_emision       DATE,
+                fecha_vencimiento   DATE NOT NULL,
+                valor_total         DECIMAL(15,2) NOT NULL,
+                estado              ENUM('pendiente','pagada','vencida') DEFAULT 'pendiente',
+                notas               TEXT NULL,
+                fecha_pago          DATE NULL,
+                created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (prefactura_id) REFERENCES prefacturas_courier(id)
+            )""",
+        ]:
+            try:
+                _c = conn.cursor()
+                _c.execute(_sql_fc)
+                conn.commit()
+                _c.close()
+            except Exception:
+                conn.rollback()
+        st.session_state['fc_schema_ok'] = True
+
+    # ── Constantes ────────────────────────────────────────────────────────────
+    _CORTE_SG_FC = date(2026, 5, 1)
+    _EXTERNOS_FC = {'1001','1003','1006','1010','1011','1016','1017','1018','1019','1020','1027','1030'}
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _conectar_bases_web_fc():
+        """Conexión de lectura a bases_web para consultar histo (clasificación de ciudades)."""
+        try:
+            return mysql.connector.connect(
+                host=os.environ.get("DB_HOST_BASES_WEB", "186.180.15.66"),
+                port=int(os.environ.get("DB_PORT_BASES_WEB", "12539")),
+                user=os.environ.get("DB_USER_BASES_WEB", "servilla_remoto"),
+                password=os.environ.get("DB_PASSWORD_BASES_WEB", ""),
+                database=os.environ.get("DB_NAME_BASES_WEB", "bases_web"),
+                connect_timeout=10,
+            )
+        except Exception:
+            return None
+
+    def _get_nombre_courier_fc(cod):
+        """Retorna nombre_completo del courier dado su código."""
+        try:
+            _c = conn.cursor(dictionary=True)
+            _c.execute(
+                "SELECT nombre_completo FROM personal WHERE codigo = %s LIMIT 1", (cod,)
+            )
+            row = _c.fetchone()
+            _c.close()
+            return row['nombre_completo'] if row else cod
+        except Exception:
+            return cod
+
+    def _get_tarifas_fc(cod):
+        """Retorna (tarifa_local, tarifa_nac) del courier."""
+        try:
+            _c = conn.cursor(dictionary=True)
+            _c.execute(
+                "SELECT tarifa_entrega_local, tarifa_entrega_nacional "
+                "FROM personal WHERE codigo = %s LIMIT 1",
+                (cod,),
+            )
+            row = _c.fetchone()
+            _c.close()
+            if row:
+                return (
+                    float(row['tarifa_entrega_local'] or 0),
+                    float(row['tarifa_entrega_nacional'] or 0),
+                )
+        except Exception:
+            pass
+        return (0.0, 0.0)
+
+    def _get_ciudad_tipo_map_fc():
+        """Retorna dict {ciudad_lower: 'local'|'nacional'} desde ciudad_tipo."""
+        try:
+            _c = conn.cursor(dictionary=True)
+            _c.execute("SELECT ciudad, tipo FROM ciudad_tipo")
+            rows = _c.fetchall()
+            _c.close()
+            return {r['ciudad'].lower().strip(): r['tipo'] for r in rows}
+        except Exception:
+            return {}
+
+    def _cargar_planillas_fc(cod_men, desde, hasta):
+        """
+        Devuelve lista de dicts, una por planilla, para el courier + rango de fechas.
+        Pre-mayo: gestiones_mensajero + clasificación desde histo+ciudad_tipo.
+        Mayo+: seriales_gestion GROUP BY planilla/ambito.
+        """
+        tarifa_local, tarifa_nac = _get_tarifas_fc(cod_men)
+        ciudad_map = _get_ciudad_tipo_map_fc()
+        planillas = {}  # planilla_str → dict acumulador
+
+        # ── Pre-mayo: gestiones_mensajero ─────────────────────────────────────
+        if desde < _CORTE_SG_FC:
+            hasta_gm = min(hasta, _CORTE_SG_FC - timedelta(days=1))
+            try:
+                _c = conn.cursor(dictionary=True)
+                _c.execute("""
+                    SELECT lot_esc AS planilla, DATE(fecha_escaner) AS fecha_esc
+                    FROM gestiones_mensajero
+                    WHERE cod_mensajero = %s
+                      AND DATE(fecha_escaner) BETWEEN %s AND %s
+                    GROUP BY lot_esc, DATE(fecha_escaner)
+                    ORDER BY fecha_esc
+                """, (cod_men, desde, hasta_gm))
+                rows_gm = _c.fetchall()
+                _c.close()
+            except Exception:
+                rows_gm = []
+
+            # Para cada planilla, clasificar seriales via histo+ciudad_tipo
+            conn_bw = _conectar_bases_web_fc()
+            for r in rows_gm:
+                pl = str(r['planilla'])
+                if pl not in planillas:
+                    planillas[pl] = {
+                        'planilla': pl,
+                        'fecha_escaner': r['fecha_esc'],
+                        'cantidad_local': 0,
+                        'cantidad_nacional': 0,
+                        '_source': 'gm',
+                        '_histo_ok': False,
+                    }
+                if conn_bw:
+                    try:
+                        _ch = conn_bw.cursor(dictionary=True)
+                        _ch.execute("""
+                            SELECT COALESCE(NULLIF(TRIM(ciudad1),''), 'Sin ciudad') AS ciudad,
+                                   COUNT(*) AS cnt
+                            FROM histo
+                            WHERE (planilla = %s OR lot_esc = %s) AND cod_men = %s
+                            GROUP BY ciudad
+                        """, (pl, pl, cod_men))
+                        rows_h = _ch.fetchall()
+                        _ch.close()
+                        for rh in rows_h:
+                            city_key = (rh['ciudad'] or '').lower().strip()
+                            tipo = ciudad_map.get(city_key, 'nacional')
+                            if tipo == 'local':
+                                planillas[pl]['cantidad_local'] += int(rh['cnt'])
+                            else:
+                                planillas[pl]['cantidad_nacional'] += int(rh['cnt'])
+                        planillas[pl]['_histo_ok'] = True
+                    except Exception:
+                        pass
+            if conn_bw:
+                try:
+                    conn_bw.close()
+                except Exception:
+                    pass
+
+        # ── Mayo+: seriales_gestion ───────────────────────────────────────────
+        if hasta >= _CORTE_SG_FC:
+            desde_sg = max(desde, _CORTE_SG_FC)
+            try:
+                _c = conn.cursor(dictionary=True)
+                _c.execute("""
+                    SELECT planilla,
+                           fecha_escaner,
+                           ambito,
+                           COUNT(*) AS cnt,
+                           SUM(precio_mensajero) AS valor_ambito,
+                           AVG(precio_mensajero) AS precio_unit
+                    FROM seriales_gestion
+                    WHERE cod_men = %s
+                      AND fecha_escaner BETWEEN %s AND %s
+                    GROUP BY planilla, fecha_escaner, ambito
+                    ORDER BY fecha_escaner
+                """, (cod_men, desde_sg, hasta))
+                rows_sg = _c.fetchall()
+                _c.close()
+            except Exception:
+                rows_sg = []
+
+            for r in rows_sg:
+                pl = str(r['planilla'])
+                if pl not in planillas:
+                    planillas[pl] = {
+                        'planilla': pl,
+                        'fecha_escaner': r['fecha_escaner'],
+                        'cantidad_local': 0,
+                        'cantidad_nacional': 0,
+                        '_source': 'sg',
+                        '_histo_ok': True,
+                        '_precio_local_sg': 0.0,
+                        '_precio_nac_sg': 0.0,
+                        '_valor_local_sg': 0.0,
+                        '_valor_nac_sg': 0.0,
+                    }
+                ambito = str(r['ambito']).lower()
+                cnt = int(r['cnt'])
+                val = float(r['valor_ambito'] or 0)
+                unit = float(r['precio_unit'] or 0)
+                if ambito == 'nacional':
+                    planillas[pl]['cantidad_nacional'] += cnt
+                    planillas[pl]['_precio_nac_sg'] = unit
+                    planillas[pl]['_valor_nac_sg'] = planillas[pl].get('_valor_nac_sg', 0) + val
+                else:
+                    planillas[pl]['cantidad_local'] += cnt
+                    planillas[pl]['_precio_local_sg'] = unit
+                    planillas[pl]['_valor_local_sg'] = planillas[pl].get('_valor_local_sg', 0) + val
+
+        # ── Calcular valores y estado de bloqueo ──────────────────────────────
+        result = []
+        for pl, d in sorted(planillas.items(), key=lambda x: str(x[1].get('fecha_escaner', ''))):
+            cnt_l = d['cantidad_local']
+            cnt_n = d['cantidad_nacional']
+            total = cnt_l + cnt_n
+            source = d['_source']
+
+            # Para seriales_gestion: usar precio_mensajero almacenado
+            if source == 'sg':
+                p_l = d.get('_precio_local_sg', 0.0)
+                p_n = d.get('_precio_nac_sg', 0.0)
+                v_l = d.get('_valor_local_sg', 0.0)
+                v_n = d.get('_valor_nac_sg', 0.0)
+            else:
+                # Para gestiones_mensajero: calcular con tarifas de personal
+                p_l = tarifa_local
+                p_n = tarifa_nac
+                v_l = cnt_l * tarifa_local
+                v_n = cnt_n * tarifa_nac
+
+            v_total = v_l + v_n
+
+            bloqueada = False
+            motivo = ''
+
+            if total == 0:
+                bloqueada = True
+                motivo = 'Sin registros'
+            elif source == 'gm' and not d.get('_histo_ok'):
+                bloqueada = True
+                motivo = 'Sin conexión a histo — clasificación local/nacional no disponible'
+            elif source == 'gm' and cnt_l == 0 and cnt_n == 0:
+                bloqueada = True
+                motivo = '⚠️ Sin clasificación — guarda los precios en Planillas Mensajeros Check'
+            elif source == 'gm' and cnt_l > 0 and p_l == 0:
+                bloqueada = True
+                motivo = 'Tarifa local no configurada en personal'
+            elif source == 'gm' and cnt_n > 0 and p_n == 0:
+                bloqueada = True
+                motivo = 'Tarifa nacional no configurada en personal'
+            elif v_total == 0 and total > 0:
+                bloqueada = True
+                motivo = 'Valor total = $0 — verifique tarifas en personal'
+
+            result.append({
+                'planilla': pl,
+                'fecha_escaner': d.get('fecha_escaner'),
+                'cantidad_local': cnt_l,
+                'cantidad_nacional': cnt_n,
+                'precio_local': p_l,
+                'precio_nac': p_n,
+                'valor_local': v_l,
+                'valor_nac': v_n,
+                'valor_total': v_total,
+                'bloqueada': bloqueada,
+                'motivo': motivo,
+            })
+        return result
+
+    # ── Sub-tabs ──────────────────────────────────────────────────────────────
+    fc_stab1, fc_stab2, fc_stab3 = st.tabs([
+        "🔍 Seleccionar Planillas",
+        "📋 Prefacturas",
+        "💰 Cuentas por Pagar",
+    ])
+
+    # ── Sub-tab 1: Selección de planillas → generar prefactura ────────────────
+    with fc_stab1:
+        st.markdown("#### Seleccionar planillas para prefactura")
+
+        _fc_col1, _fc_col2, _fc_col3 = st.columns([2, 1, 1])
+        with _fc_col1:
+            _ext_opts = []
+            for _ec in sorted(_EXTERNOS_FC):
+                _ext_opts.append(f"{_ec} — {_get_nombre_courier_fc(_ec)}")
+            _fc_sel = st.selectbox("Courier externo", _ext_opts, key='fc_sel_ext')
+            _fc_cod = _fc_sel.split(' — ')[0] if _fc_sel else None
+
+        with _fc_col2:
+            _fc_desde = st.date_input(
+                "Desde", value=date.today().replace(day=1), key='fc_desde'
+            )
+        with _fc_col3:
+            _fc_hasta = st.date_input(
+                "Hasta", value=date.today(), key='fc_hasta'
+            )
+
+        if st.button("🔍 Cargar Planillas", key='fc_cargar_btn'):
+            with st.spinner("Consultando planillas…"):
+                st.session_state['fc_planillas'] = _cargar_planillas_fc(
+                    _fc_cod, _fc_desde, _fc_hasta
+                )
+                st.session_state['fc_cod_cargado'] = _fc_cod
+                st.session_state['fc_desde_cargado'] = _fc_desde
+                st.session_state['fc_hasta_cargado'] = _fc_hasta
+
+        _fc_plist = st.session_state.get('fc_planillas', [])
+
+        if _fc_plist:
+            st.markdown("---")
+            _fc_selected = []
+            _fc_any_blocked = False
+
+            for _pi, _pp in enumerate(_fc_plist):
+                _pc1, _pc2 = st.columns([1, 14])
+                with _pc1:
+                    if _pp['bloqueada']:
+                        st.checkbox("", value=False, disabled=True, key=f'fc_chk_{_pi}')
+                        _fc_any_blocked = True
+                    else:
+                        if st.checkbox("", key=f'fc_chk_{_pi}'):
+                            _fc_selected.append(_pp)
+                with _pc2:
+                    _fe = _pp['fecha_escaner']
+                    if _pp['bloqueada']:
+                        st.markdown(
+                            f"**{_pp['planilla']}** &nbsp; `{_fe}` &nbsp; 🔴 _{_pp['motivo']}_"
+                        )
+                    else:
+                        st.markdown(
+                            f"**{_pp['planilla']}** &nbsp; `{_fe}` &nbsp;"
+                            f" Local: {_pp['cantidad_local']} × ${_pp['precio_local']:,.0f}"
+                            f" = **${_pp['valor_local']:,.0f}**"
+                            f" &nbsp;|&nbsp; Nacional: {_pp['cantidad_nacional']}"
+                            f" × ${_pp['precio_nac']:,.0f} = **${_pp['valor_nac']:,.0f}**"
+                            f" &nbsp;|&nbsp; **Total: ${_pp['valor_total']:,.0f}**"
+                        )
+
+            if _fc_any_blocked:
+                st.warning(
+                    "⚠️ Las planillas bloqueadas necesitan clasificación local/nacional. "
+                    "Configura tarifas en **1_Clientes_Precios** o clasifica ciudades en "
+                    "**13_Planillas_Mensajeros_Check** antes de incluirlas en una prefactura."
+                )
+
+            if _fc_selected:
+                _fc_tot_l = sum(p['cantidad_local'] for p in _fc_selected)
+                _fc_tot_n = sum(p['cantidad_nacional'] for p in _fc_selected)
+                _fc_tot_v = sum(p['valor_total'] for p in _fc_selected)
+                st.markdown("---")
+                st.markdown(
+                    f"**Seleccionadas:** {len(_fc_selected)} planillas &nbsp;|&nbsp;"
+                    f" Local: {_fc_tot_l} entregas &nbsp;|&nbsp;"
+                    f" Nacional: {_fc_tot_n} entregas &nbsp;|&nbsp;"
+                    f" **Total: ${_fc_tot_v:,.0f}**"
+                )
+                _fc_notas = st.text_area("Notas (opcional)", key='fc_notas_pref', height=68)
+
+                if st.button("✅ Generar Prefactura", type="primary", key='fc_gen_pref'):
+                    try:
+                        _c = conn.cursor()
+                        _c.execute("""
+                            INSERT INTO prefacturas_courier
+                              (cod_mensajero, fecha_generacion, periodo_desde, periodo_hasta,
+                               cantidad_planillas, cantidad_local, cantidad_nacional,
+                               valor_local, valor_nacional, valor_total, estado, notas)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'borrador', %s)
+                        """, (
+                            st.session_state.get('fc_cod_cargado'),
+                            date.today(),
+                            st.session_state.get('fc_desde_cargado'),
+                            st.session_state.get('fc_hasta_cargado'),
+                            len(_fc_selected), _fc_tot_l, _fc_tot_n,
+                            sum(p['valor_local'] for p in _fc_selected),
+                            sum(p['valor_nac'] for p in _fc_selected),
+                            _fc_tot_v,
+                            _fc_notas or None,
+                        ))
+                        _pref_id = _c.lastrowid
+                        for _pp in _fc_selected:
+                            _c.execute("""
+                                INSERT INTO prefactura_planillas
+                                  (prefactura_id, planilla, fecha_escaner,
+                                   cantidad_local, cantidad_nacional,
+                                   precio_local, precio_nac,
+                                   valor_local, valor_nac, valor_total)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            """, (
+                                _pref_id, _pp['planilla'], _pp['fecha_escaner'],
+                                _pp['cantidad_local'], _pp['cantidad_nacional'],
+                                _pp['precio_local'], _pp['precio_nac'],
+                                _pp['valor_local'], _pp['valor_nac'], _pp['valor_total'],
+                            ))
+                        conn.commit()
+                        _c.close()
+                        st.success(f"✅ Prefactura #{_pref_id} generada exitosamente")
+                        st.session_state.pop('fc_planillas', None)
+                        st.rerun()
+                    except Exception as _e:
+                        conn.rollback()
+                        st.error(f"Error al generar prefactura: {_e}")
+
+    # ── Sub-tab 2: Prefacturas — aprobar y registrar factura recibida ─────────
+    with fc_stab2:
+        st.markdown("#### Prefacturas Generadas")
+
+        _fc_pref_filtro = st.radio(
+            "Estado", ["Todas", "borrador", "aprobada", "facturada"],
+            horizontal=True, key='fc_pref_filtro'
+        )
+        try:
+            _c = conn.cursor(dictionary=True)
+            if _fc_pref_filtro == "Todas":
+                _c.execute("""
+                    SELECT pc.*, p.nombre_completo AS nombre_courier
+                    FROM prefacturas_courier pc
+                    LEFT JOIN personal p ON pc.cod_mensajero = p.codigo
+                    ORDER BY pc.fecha_generacion DESC
+                """)
+            else:
+                _c.execute("""
+                    SELECT pc.*, p.nombre_completo AS nombre_courier
+                    FROM prefacturas_courier pc
+                    LEFT JOIN personal p ON pc.cod_mensajero = p.codigo
+                    WHERE pc.estado = %s
+                    ORDER BY pc.fecha_generacion DESC
+                """, (_fc_pref_filtro,))
+            _fc_prefs = _c.fetchall()
+            _c.close()
+        except Exception as _e:
+            st.error(f"Error cargando prefacturas: {_e}")
+            _fc_prefs = []
+
+        if not _fc_prefs:
+            st.info("No hay prefacturas para el filtro seleccionado.")
+        else:
+            for _pref in _fc_prefs:
+                _est_ico = {'borrador': '📝', 'aprobada': '✅', 'facturada': '🧾'}.get(
+                    _pref['estado'], '❓'
+                )
+                _pref_titulo = (
+                    f"{_est_ico} Prefactura #{_pref['id']} — "
+                    f"{_pref['nombre_courier'] or _pref['cod_mensajero']} — "
+                    f"${_pref['valor_total']:,.0f} — {_pref['fecha_generacion']}"
+                )
+                with st.expander(_pref_titulo):
+                    # Líneas de planilla
+                    try:
+                        _c = conn.cursor(dictionary=True)
+                        _c.execute(
+                            "SELECT * FROM prefactura_planillas "
+                            "WHERE prefactura_id = %s ORDER BY fecha_escaner",
+                            (_pref['id'],),
+                        )
+                        _lineas = _c.fetchall()
+                        _c.close()
+                        if _lineas:
+                            _df_lin = pd.DataFrame(_lineas)[[
+                                'planilla', 'fecha_escaner', 'cantidad_local',
+                                'cantidad_nacional', 'precio_local', 'precio_nac',
+                                'valor_local', 'valor_nac', 'valor_total',
+                            ]]
+                            st.dataframe(_df_lin, use_container_width=True)
+                    except Exception:
+                        pass
+
+                    if _pref['estado'] == 'borrador':
+                        _ca1, _ca2 = st.columns(2)
+                        with _ca1:
+                            if st.button(
+                                "✅ Aprobar Prefactura", key=f'fc_apr_{_pref["id"]}'
+                            ):
+                                try:
+                                    _c = conn.cursor()
+                                    _c.execute(
+                                        "UPDATE prefacturas_courier SET estado='aprobada' WHERE id=%s",
+                                        (_pref['id'],),
+                                    )
+                                    conn.commit()
+                                    _c.close()
+                                    st.success("Prefactura aprobada")
+                                    st.rerun()
+                                except Exception as _e:
+                                    conn.rollback()
+                                    st.error(f"Error: {_e}")
+                        with _ca2:
+                            if st.button("🗑️ Eliminar", key=f'fc_del_{_pref["id"]}'):
+                                try:
+                                    _c = conn.cursor()
+                                    _c.execute(
+                                        "DELETE FROM prefacturas_courier WHERE id=%s",
+                                        (_pref['id'],),
+                                    )
+                                    conn.commit()
+                                    _c.close()
+                                    st.success("Prefactura eliminada")
+                                    st.rerun()
+                                except Exception as _e:
+                                    conn.rollback()
+                                    st.error(f"Error: {_e}")
+
+                    elif _pref['estado'] == 'aprobada':
+                        st.markdown("**Registrar Factura Recibida del Courier**")
+                        _cr1, _cr2 = st.columns(2)
+                        with _cr1:
+                            _fc_num = st.text_input(
+                                "Número de factura", key=f'fc_num_{_pref["id"]}'
+                            )
+                            _fc_femi = st.date_input(
+                                "Fecha emisión", value=date.today(),
+                                key=f'fc_femi_{_pref["id"]}'
+                            )
+                        with _cr2:
+                            _fc_fvcto = st.date_input(
+                                "Fecha vencimiento",
+                                value=date.today() + timedelta(days=30),
+                                key=f'fc_fvcto_{_pref["id"]}'
+                            )
+                            _fc_val = st.number_input(
+                                "Valor factura",
+                                value=float(_pref['valor_total']),
+                                key=f'fc_val_{_pref["id"]}'
+                            )
+                        _fc_notas_r = st.text_input(
+                            "Notas", key=f'fc_notasr_{_pref["id"]}'
+                        )
+                        if st.button(
+                            "💾 Registrar Factura CxP", type="primary",
+                            key=f'fc_regfac_{_pref["id"]}'
+                        ):
+                            if not _fc_num.strip():
+                                st.error("El número de factura es obligatorio")
+                            else:
+                                try:
+                                    _c = conn.cursor()
+                                    _c.execute("""
+                                        INSERT INTO facturas_courier_cxp
+                                          (prefactura_id, cod_mensajero, numero_factura,
+                                           fecha_emision, fecha_vencimiento,
+                                           valor_total, estado, notas)
+                                        VALUES (%s, %s, %s, %s, %s, %s, 'pendiente', %s)
+                                    """, (
+                                        _pref['id'], _pref['cod_mensajero'],
+                                        _fc_num.strip(), _fc_femi, _fc_fvcto,
+                                        _fc_val, _fc_notas_r or None,
+                                    ))
+                                    _c.execute(
+                                        "UPDATE prefacturas_courier SET estado='facturada' WHERE id=%s",
+                                        (_pref['id'],),
+                                    )
+                                    conn.commit()
+                                    _c.close()
+                                    st.success("✅ Factura registrada como cuenta por pagar")
+                                    st.rerun()
+                                except Exception as _e:
+                                    conn.rollback()
+                                    st.error(f"Error: {_e}")
+
+    # ── Sub-tab 3: Cuentas por Pagar ──────────────────────────────────────────
+    with fc_stab3:
+        st.markdown("#### Cuentas por Pagar — Courier Externos")
+
+        # Marcar vencidas automáticamente
+        try:
+            _c = conn.cursor()
+            _c.execute("""
+                UPDATE facturas_courier_cxp
+                SET estado = 'vencida'
+                WHERE estado = 'pendiente' AND fecha_vencimiento < CURDATE()
+            """)
+            conn.commit()
+            _c.close()
+        except Exception:
+            conn.rollback()
+
+        _fc_cxp_f = st.radio(
+            "Estado", ["Todas", "pendiente", "vencida", "pagada"],
+            horizontal=True, key='fc_cxp_filtro'
+        )
+        try:
+            _c = conn.cursor(dictionary=True)
+            if _fc_cxp_f == "Todas":
+                _c.execute("""
+                    SELECT fc.*, p.nombre_completo AS nombre_courier
+                    FROM facturas_courier_cxp fc
+                    LEFT JOIN personal p ON fc.cod_mensajero = p.codigo
+                    ORDER BY fc.fecha_vencimiento
+                """)
+            else:
+                _c.execute("""
+                    SELECT fc.*, p.nombre_completo AS nombre_courier
+                    FROM facturas_courier_cxp fc
+                    LEFT JOIN personal p ON fc.cod_mensajero = p.codigo
+                    WHERE fc.estado = %s
+                    ORDER BY fc.fecha_vencimiento
+                """, (_fc_cxp_f,))
+            _fc_cxp_list = _c.fetchall()
+            _c.close()
+        except Exception as _e:
+            st.error(f"Error: {_e}")
+            _fc_cxp_list = []
+
+        if not _fc_cxp_list:
+            st.info("No hay cuentas por pagar para el filtro seleccionado.")
+        else:
+            _fc_pendiente = sum(
+                r['valor_total'] for r in _fc_cxp_list
+                if r['estado'] in ('pendiente', 'vencida')
+            )
+            if _fc_pendiente > 0:
+                st.metric("Total pendiente de pago", f"${_fc_pendiente:,.0f}")
+
+            for _fac in _fc_cxp_list:
+                _fic = {'pendiente': '🕐', 'vencida': '🔴', 'pagada': '✅'}.get(
+                    _fac['estado'], '❓'
+                )
+                _vcto_extra = ''
+                if _fac['fecha_vencimiento'] and _fac['estado'] != 'pagada':
+                    _dias = (_fac['fecha_vencimiento'] - date.today()).days
+                    if _dias < 0:
+                        _vcto_extra = f' — **{abs(_dias)} días vencida**'
+                    elif _dias <= 7:
+                        _vcto_extra = f' — ⚠️ vence en {_dias} días'
+
+                with st.expander(
+                    f"{_fic} Fac. {_fac['numero_factura']} — "
+                    f"{_fac['nombre_courier'] or _fac['cod_mensajero']} — "
+                    f"${_fac['valor_total']:,.0f} — vence {_fac['fecha_vencimiento']}"
+                    f"{_vcto_extra}"
+                ):
+                    _cd1, _cd2 = st.columns(2)
+                    with _cd1:
+                        st.write(f"**Prefactura:** #{_fac['prefactura_id']}")
+                        st.write(f"**Emisión:** {_fac['fecha_emision']}")
+                        st.write(f"**Estado:** {_fac['estado']}")
+                    with _cd2:
+                        st.write(f"**Vencimiento:** {_fac['fecha_vencimiento']}")
+                        if _fac['notas']:
+                            st.write(f"**Notas:** {_fac['notas']}")
+                        if _fac['fecha_pago']:
+                            st.write(f"**Fecha pago:** {_fac['fecha_pago']}")
+
+                    if _fac['estado'] in ('pendiente', 'vencida'):
+                        _cp1, _cp2 = st.columns([2, 1])
+                        with _cp1:
+                            _fc_fec_pago = st.date_input(
+                                "Fecha de pago", value=date.today(),
+                                key=f'fc_fecpago_{_fac["id"]}'
+                            )
+                        with _cp2:
+                            st.write("")
+                            st.write("")
+                            if st.button(
+                                "💳 Marcar Pagada", key=f'fc_pagar_{_fac["id"]}'
+                            ):
+                                try:
+                                    _c = conn.cursor()
+                                    _c.execute("""
+                                        UPDATE facturas_courier_cxp
+                                        SET estado='pagada', fecha_pago=%s
+                                        WHERE id=%s
+                                    """, (_fc_fec_pago, _fac['id']))
+                                    conn.commit()
+                                    _c.close()
+                                    st.success("✅ Factura marcada como pagada")
+                                    st.rerun()
+                                except Exception as _e:
+                                    conn.rollback()
+                                    st.error(f"Error: {_e}")
 
 
 if 'cursor' in locals():
