@@ -52,7 +52,7 @@ if 'facturacion_schema_ok' not in st.session_state:
 
     st.session_state['facturacion_schema_ok'] = True
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+_secciones = [
     "📄 Facturas Emitidas (Clientes)",
     "💵 Registrar Pago Recibido",
     "📊 Resumen Financiero",
@@ -61,9 +61,10 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "👷 Pago Personal",
     "💼 Adelantos Dueño",
     "🏙️ Facturación Ciudades",
-])
+]
+_seccion = st.sidebar.radio("Sección", _secciones, key="facturacion_seccion")
 
-with tab1:
+if _seccion == "📄 Facturas Emitidas (Clientes)":
     st.subheader("Facturas Emitidas a Clientes")
 
     # Estado para confirmación de borrado
@@ -622,7 +623,7 @@ with tab1:
                         st.code(traceback.format_exc())
                         conn.rollback()
 
-with tab2:
+if _seccion == "💵 Registrar Pago Recibido":
     st.subheader("Registrar Pago Recibido")
 
     try:
@@ -727,7 +728,7 @@ with tab2:
     except Exception as e:
         st.error(f"Error: {e}")
 
-with tab3:
+if _seccion == "📊 Resumen Financiero":
     st.subheader("Resumen Financiero")
 
     try:
@@ -814,7 +815,7 @@ with tab3:
     except Exception as e:
         st.error(f"Error: {e}")
 
-with tab4:
+if _seccion == "📥 Facturas Proveedores":
     st.subheader("Facturas de Proveedores")
 
     try:
@@ -977,7 +978,7 @@ with tab4:
     except Exception as e:
         st.error(f"Error: {e}")
 
-with tab5:
+if _seccion == "📋 Cuentas por Pagar":
     st.subheader("Cuentas por Pagar - Vista Consolidada")
     st.info("Vista unificada de todas las obligaciones pendientes de pago")
 
@@ -1152,7 +1153,7 @@ with tab5:
     except Exception as e:
         st.error(f"Error: {e}")
 
-with tab6:
+if _seccion == "👷 Pago Personal":
     st.subheader("👷 Pago a Personal")
     subtab_crear, subtab_pagar = st.tabs(["📋 Crear Liquidación", "💸 Pago por Transferencia"])
 
@@ -2259,7 +2260,7 @@ with tab6:
         except Exception as e:
             st.error(f"Error: {e}")
 
-with tab7:
+if _seccion == "💼 Adelantos Dueño":
     st.subheader("💼 Adelantos Dueño — Facturas Pagadas por el Propietario")
     st.info(
         "Registra aquí las facturas que pagaste de tu bolsillo a nombre de la empresa. "
@@ -2407,7 +2408,7 @@ with tab7:
         st.error(f"Error: {e}")
 
 
-with tab8:
+if _seccion == "🏙️ Facturación Ciudades":
     st.subheader("🏙️ Facturación Ciudades — Courier Externos")
 
     # ── Schema: crear tablas nuevas una sola vez por sesión ───────────────────
