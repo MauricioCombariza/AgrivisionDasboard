@@ -62,7 +62,7 @@ _secciones = [
     "💼 Adelantos Dueño",
     "🏙️ Facturación Ciudades",
 ]
-_seccion = st.sidebar.radio("Sección", _secciones, key="facturacion_seccion")
+_seccion = st.selectbox("Sección", _secciones, key="facturacion_seccion")
 
 if _seccion == "📄 Facturas Emitidas (Clientes)":
     st.subheader("Facturas Emitidas a Clientes")
