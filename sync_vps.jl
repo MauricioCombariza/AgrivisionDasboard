@@ -136,7 +136,7 @@ function sincronizar_tabla(db::String, tabla::String, protect_col::Union{String,
         # porque cada token se pasa como argumento separado al SO (no pasa por /bin/sh).
         run(pipeline(
             `mysqldump -u$LOCAL_USER -p$LOCAL_PASS --single-transaction --no-tablespaces
-             --no-create-info --replace --skip-add-locks $db $tabla`;
+             --no-create-info --skip-add-locks $db $tabla`;
             stdout=sql_local, stderr=devnull,
         ))
         sz = round(filesize(sql_local) / 1024, digits=1)
@@ -157,28 +157,27 @@ function sincronizar_tabla(db::String, tabla::String, protect_col::Union{String,
         # entre backticks (ej. `mi_tabla`) son interpretados como comandos bash.
         # Como Julia ya sustituyo los nombres de tabla, el heredoc recibe texto plano.
         prot_before = isnothing(protect_col) ? "" : """
-# Guardar filas editadas manualmente en el VPS (no deben ser sobreescritas)
+# Guardar filas protegidas antes del truncate
 mysql -u$VPS_DB_USER $db << 'EOSQL_BEFORE'
+  SET FOREIGN_KEY_CHECKS=0;
   DROP TABLE IF EXISTS $prot_tabla;
   CREATE TABLE $prot_tabla LIKE $tabla;
   INSERT INTO $prot_tabla SELECT * FROM $tabla WHERE $protect_col = 1;
+  SET FOREIGN_KEY_CHECKS=1;
 EOSQL_BEFORE
 PROT_COUNT=\$(mysql -u$VPS_DB_USER $db -sN -e 'SELECT COUNT(*) FROM $prot_tabla;')
 echo "  -> \$PROT_COUNT fila(s) protegida(s) guardadas"
 """
 
-        # Note 16: Las comillas simples en bash (`-e 'SELECT ...'`) evitan que bash
-        # interprete caracteres especiales como $, `, \. Aqui es seguro porque
-        # los nombres de tabla ya fueron sustituidos por Julia (son texto plano).
-        # Si se usaran comillas dobles (`-e "SELECT ..."`), bash intentaria expandir
-        # $prot_tabla como una variable bash → resultado vacio → error SQL.
         prot_after = isnothing(protect_col) ? "" : """
-# Restaurar filas protegidas (sobreescriben lo que trajo el sync para esas filas)
+# Restaurar filas protegidas encima del import
 RESTORED=\$(mysql -u$VPS_DB_USER $db -sN -e 'SELECT COUNT(*) FROM $prot_tabla;')
 if [ "\$RESTORED" -gt "0" ]; then
   mysql -u$VPS_DB_USER $db << 'EOSQL_AFTER'
+    SET FOREIGN_KEY_CHECKS=0;
     REPLACE INTO $tabla SELECT * FROM $prot_tabla;
     DROP TABLE $prot_tabla;
+    SET FOREIGN_KEY_CHECKS=1;
 EOSQL_AFTER
   echo "  -> \$RESTORED fila(s) protegida(s) restauradas"
 else
@@ -186,16 +185,17 @@ else
 fi
 """
 
-        # Note 17: `set -e` al inicio del script bash hace que el script termine
-        # inmediatamente si cualquier comando devuelve un codigo de salida distinto de 0.
-        # `export MYSQL_PWD=` es la forma segura de pasar la contrasena a mysql/mysqldump:
-        # evita que aparezca en la lista de procesos (ps aux) a diferencia de -pContrasena.
+        # TRUNCATE + INSERT en vez de REPLACE INTO:
+        # TRUNCATE es DDL (no row-locks), evita el lock contention con procesos
+        # que lean la tabla concurrentemente. INSERT es mas rapido que REPLACE
+        # porque no busca duplicados (la tabla ya esta vacia).
         script = """
 set -e
 export MYSQL_PWD='$VPS_DB_PASS'
 
 $prot_before
-mysql -u$VPS_DB_USER --init-command="SET FOREIGN_KEY_CHECKS=0; SET UNIQUE_CHECKS=0; SET lock_wait_timeout=30;" $db < $remote_sql
+mysql -u$VPS_DB_USER $db -e 'SET FOREIGN_KEY_CHECKS=0; TRUNCATE TABLE $tabla; SET FOREIGN_KEY_CHECKS=1;'
+mysql -u$VPS_DB_USER --init-command="SET FOREIGN_KEY_CHECKS=0; SET UNIQUE_CHECKS=0;" $db < $remote_sql
 $prot_after
 rm -f $remote_sql $remote_sh
 """
