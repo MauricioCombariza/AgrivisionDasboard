@@ -358,6 +358,104 @@ try:
                             conn.rollback()
                             st.error(f"Error: {e}")
 
+            # =====================================================
+            # RECUPERAR PLANILLA DESDE bases_web (histo)
+            # =====================================================
+            with st.expander("🔄 Recuperar planilla desde bases_web (histo)", expanded=False):
+                st.caption(
+                    "Reconstruye todos los registros a partir de bases_web/histo, "
+                    "usando el agrupamiento original (cod_men original como clave). "
+                    "Útil cuando una planilla perdió registros por fusión incorrecta."
+                )
+
+                _men_target_rec = st.selectbox(
+                    "Mensajero destino para la reconstrucción",
+                    options=list(opciones_mensajeros.keys()),
+                    index=0,
+                    key="select_men_recuperar"
+                )
+                _cod_target_rec = opciones_mensajeros[_men_target_rec]
+
+                if st.button("🔄 Recuperar desde bases_web", type="primary", key="btn_recuperar_histo"):
+                    _conn_rec = _conectar_bases_web()
+                    if not _conn_rec:
+                        st.error("No se pudo conectar a bases_web")
+                    else:
+                        try:
+                            _cur_rec = _conn_rec.cursor(dictionary=True)
+                            _cur_rec.execute("""
+                                SELECT
+                                    f_esc, cod_men, lot_esc, orden, mot_esc, no_entidad,
+                                    COUNT(*) AS total_seriales
+                                FROM histo
+                                WHERE (planilla = %s OR lot_esc = %s)
+                                GROUP BY f_esc, cod_men, lot_esc, orden, mot_esc, no_entidad
+                            """, (num_planilla, num_planilla))
+                            _grupos_histo = _cur_rec.fetchall()
+                            _cur_rec.close()
+                            _conn_rec.close()
+
+                            if not _grupos_histo:
+                                st.warning("No se encontraron registros en bases_web/histo para esta planilla.")
+                            else:
+                                # Precio de referencia desde registros actuales
+                                _precio_ref = float(df_busq['precio'].astype(float).replace(0, float('nan')).mean()) if not df_busq.empty else 0.0
+                                if _precio_ref != _precio_ref:  # NaN check
+                                    _precio_ref = 0.0
+
+                                # Obtener mensajero_id del destino
+                                _cur_mg = conn.cursor(dictionary=True)
+                                _cur_mg.execute("SELECT id FROM personal WHERE codigo = %s LIMIT 1", (_cod_target_rec,))
+                                _men_id_rec = (_cur_mg.fetchone() or {}).get('id')
+                                _cur_mg.close()
+
+                                from datetime import date as _date_rec
+
+                                _cur_mg = conn.cursor()
+                                # Eliminar registros actuales de la planilla
+                                _cur_mg.execute("DELETE FROM gestiones_mensajero WHERE lot_esc = %s", (num_planilla,))
+                                _deleted = _cur_mg.rowcount
+
+                                # Reinsertar cada grupo con el mensajero destino
+                                _inserted = 0
+                                for _g in _grupos_histo:
+                                    _val_t = int(_g['total_seriales']) * _precio_ref
+                                    _cur_mg.execute("""
+                                        INSERT INTO gestiones_mensajero
+                                            (fecha_escaner, cod_mensajero, mensajero_id, lot_esc, orden,
+                                             tipo_gestion, cliente, total_seriales, valor_unitario,
+                                             valor_total, fecha_registro, editado_manualmente)
+                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1)
+                                    """, (
+                                        _g['f_esc'], _cod_target_rec, _men_id_rec,
+                                        str(_g['lot_esc']), str(_g['orden']),
+                                        _g['mot_esc'], _g['no_entidad'],
+                                        int(_g['total_seriales']),
+                                        _precio_ref, _val_t,
+                                        _date_rec.today()
+                                    ))
+                                    _inserted += 1
+
+                                # Mantener planilla como revisada
+                                _cur_mg.execute("""
+                                    INSERT IGNORE INTO planillas_revisadas (lot_esc, fecha_revision)
+                                    VALUES (%s, CURDATE())
+                                """, (num_planilla,))
+
+                                conn.commit()
+                                _cur_mg.close()
+
+                                st.success(
+                                    f"✅ Planilla {num_planilla} recuperada: "
+                                    f"{_deleted} registros eliminados → {_inserted} reconstruidos "
+                                    f"con cod_men={_cod_target_rec}"
+                                )
+                                st.session_state.planilla_buscada = None
+                                st.rerun()
+                        except Exception as e:
+                            conn.rollback()
+                            st.error(f"Error al recuperar: {e}")
+
             st.divider()
 
             if es_courier_externo_busq:
