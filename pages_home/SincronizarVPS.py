@@ -188,20 +188,6 @@ def _julia_disponible():
     except Exception:
         return False
 
-def _run_julia(modo):
-    """Ejecuta sync_vps.jl y devuelve (ok, salida)."""
-    try:
-        r = subprocess.run(
-            ["julia", f"-t{os.cpu_count() or 4}", JULIA_SCRIPT, modo],
-            capture_output=True, text=True, timeout=600
-        )
-        salida = r.stdout + (("\n" + r.stderr) if r.stderr.strip() else "")
-        return r.returncode == 0, salida.strip()
-    except subprocess.TimeoutExpired:
-        return False, "❌ Timeout: el script tardó más de 10 minutos"
-    except FileNotFoundError:
-        return False, "❌ `julia` no encontrado. Instálalo o agrega al PATH."
-
 st.markdown("### ⚡ Sincronizar con Julia (paralelo)")
 st.caption("Pipeline directo mysqldump → SSH → mysql. Sin archivos temporales. Tablas en paralelo.")
 
@@ -209,15 +195,33 @@ col_j1, col_j2 = st.columns(2)
 
 with col_j1:
     if st.button("🚀 Subir tablas (Julia)", type="primary", key="julia_subir"):
-        with st.spinner("Ejecutando Julia..."):
-            ok, salida = _run_julia("subir")
+        st.info("Ejecutando Julia… el output aparece línea a línea.")
+        out_box = st.code("", language=None)
+        lines: list[str] = []
+        ok = False
+        try:
+            proc = subprocess.Popen(
+                ["julia", f"-t{os.cpu_count() or 4}", JULIA_SCRIPT, "subir"],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+            )
+            for line in proc.stdout:
+                lines.append(line.rstrip())
+                out_box.code("\n".join(lines), language=None)
+            proc.wait()
+            ok = proc.returncode == 0
+        except FileNotFoundError:
+            lines.append("❌ `julia` no encontrado en el PATH.")
+            out_box.code("\n".join(lines), language=None)
+        except Exception as exc:
+            lines.append(f"❌ Error inesperado: {exc}")
+            out_box.code("\n".join(lines), language=None)
+
         hora = datetime.now().strftime("%H:%M:%S")
         if ok:
             st.success(f"✅ Completado a las {hora}")
         else:
             st.error("❌ Terminó con errores")
-        with st.expander("Salida del script", expanded=True):
-            st.code(salida, language=None)
 
 with col_j2:
     st.button("⬇️ Bajar personal (Julia)", key="julia_bajar", disabled=True,
