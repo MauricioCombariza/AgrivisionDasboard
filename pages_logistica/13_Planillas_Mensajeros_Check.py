@@ -369,6 +369,10 @@ try:
                 )
 
                 # ── Diagnóstico: qué hay en histo para esta planilla ──────────
+                # Campo de búsqueda en histo según tipo de mensajero
+                _histo_campo = 'planilla' if es_courier_externo_busq else 'lot_esc'
+                st.caption(f"Tipo: **{'courier externo → busca por planilla' if es_courier_externo_busq else 'mensajero → busca por lot_esc'}**")
+
                 if st.button("🔍 Ver diagnóstico en histo", key="btn_diag_histo"):
                     _conn_diag = _conectar_bases_web()
                     if not _conn_diag:
@@ -377,36 +381,29 @@ try:
                         try:
                             _cur_diag = _conn_diag.cursor(dictionary=True)
 
-                            # Total seriales sin filtro de cod_men
-                            _cur_diag.execute("""
+                            _cur_diag.execute(f"""
                                 SELECT COUNT(*) AS total_rows,
                                        COUNT(DISTINCT serial) AS seriales_unicos
-                                FROM histo
-                                WHERE (planilla = %s OR lot_esc = %s)
-                            """, (num_planilla, num_planilla))
+                                FROM histo WHERE {_histo_campo} = %s
+                            """, (num_planilla,))
                             _tot = _cur_diag.fetchone()
 
-                            # Desglose por cod_men
-                            _cur_diag.execute("""
+                            _cur_diag.execute(f"""
                                 SELECT cod_men,
-                                       COUNT(*) AS filas,
                                        COUNT(DISTINCT serial) AS seriales_unicos
-                                FROM histo
-                                WHERE (planilla = %s OR lot_esc = %s)
-                                GROUP BY cod_men
-                                ORDER BY seriales_unicos DESC
-                            """, (num_planilla, num_planilla))
+                                FROM histo WHERE {_histo_campo} = %s
+                                GROUP BY cod_men ORDER BY seriales_unicos DESC
+                            """, (num_planilla,))
                             _men_rows = _cur_diag.fetchall()
 
-                            # Grupos con serial único como Agrupacion_Escaner los crearía
-                            _cur_diag.execute("""
-                                SELECT f_esc, cod_men, lot_esc, orden, mot_esc, no_entidad,
+                            _cur_diag.execute(f"""
+                                SELECT f_esc, cod_men, {_histo_campo} AS lot_esc_ref,
+                                       orden, mot_esc, no_entidad,
                                        COUNT(DISTINCT serial) AS seriales
-                                FROM histo
-                                WHERE (planilla = %s OR lot_esc = %s)
-                                GROUP BY f_esc, cod_men, lot_esc, orden, mot_esc, no_entidad
+                                FROM histo WHERE {_histo_campo} = %s
+                                GROUP BY f_esc, cod_men, {_histo_campo}, orden, mot_esc, no_entidad
                                 ORDER BY cod_men, f_esc
-                            """, (num_planilla, num_planilla))
+                            """, (num_planilla,))
                             _grupos = _cur_diag.fetchall()
 
                             _cur_diag.close()
@@ -441,14 +438,14 @@ try:
                     else:
                         try:
                             _cur_rec = _conn_rec.cursor(dictionary=True)
-                            _cur_rec.execute("""
-                                SELECT
-                                    f_esc, cod_men, lot_esc, orden, mot_esc, no_entidad,
-                                    COUNT(DISTINCT serial) AS total_seriales
+                            # courier_externo → planilla en histo; mensajero → lot_esc en histo
+                            _cur_rec.execute(f"""
+                                SELECT f_esc, cod_men, orden, mot_esc, no_entidad,
+                                       COUNT(DISTINCT serial) AS total_seriales
                                 FROM histo
-                                WHERE (planilla = %s OR lot_esc = %s)
-                                GROUP BY f_esc, cod_men, lot_esc, orden, mot_esc, no_entidad
-                            """, (num_planilla, num_planilla))
+                                WHERE {_histo_campo} = %s
+                                GROUP BY f_esc, cod_men, {_histo_campo}, orden, mot_esc, no_entidad
+                            """, (num_planilla,))
                             _grupos_histo = _cur_rec.fetchall()
                             _cur_rec.close()
                             _conn_rec.close()
@@ -456,12 +453,10 @@ try:
                             if not _grupos_histo:
                                 st.warning("No se encontraron registros en bases_web/histo para esta planilla.")
                             else:
-                                # Precio de referencia desde registros actuales
                                 _precio_ref = float(df_busq['precio'].astype(float).replace(0, float('nan')).mean()) if not df_busq.empty else 0.0
-                                if _precio_ref != _precio_ref:  # NaN check
+                                if _precio_ref != _precio_ref:
                                     _precio_ref = 0.0
 
-                                # Obtener mensajero_id del destino
                                 _cur_mg = conn.cursor(dictionary=True)
                                 _cur_mg.execute("SELECT id FROM personal WHERE codigo = %s LIMIT 1", (_cod_target_rec,))
                                 _men_id_rec = (_cur_mg.fetchone() or {}).get('id')
@@ -470,11 +465,9 @@ try:
                                 from datetime import date as _date_rec
 
                                 _cur_mg = conn.cursor()
-                                # Eliminar registros actuales de la planilla
                                 _cur_mg.execute("DELETE FROM gestiones_mensajero WHERE lot_esc = %s", (num_planilla,))
                                 _deleted = _cur_mg.rowcount
 
-                                # Reinsertar cada grupo con el mensajero destino
                                 _inserted = 0
                                 for _g in _grupos_histo:
                                     _val_t = int(_g['total_seriales']) * _precio_ref
@@ -486,7 +479,7 @@ try:
                                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1)
                                     """, (
                                         _g['f_esc'], _cod_target_rec, _men_id_rec,
-                                        str(_g['lot_esc']), str(_g['orden']),
+                                        num_planilla, str(_g['orden']),  # lot_esc = num_planilla siempre
                                         _g['mot_esc'], _g['no_entidad'],
                                         int(_g['total_seriales']),
                                         _precio_ref, _val_t,
