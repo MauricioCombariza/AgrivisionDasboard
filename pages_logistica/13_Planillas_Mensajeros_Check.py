@@ -368,6 +368,64 @@ try:
                     "Útil cuando una planilla perdió registros por fusión incorrecta."
                 )
 
+                # ── Diagnóstico: qué hay en histo para esta planilla ──────────
+                if st.button("🔍 Ver diagnóstico en histo", key="btn_diag_histo"):
+                    _conn_diag = _conectar_bases_web()
+                    if not _conn_diag:
+                        st.error("No se pudo conectar a bases_web")
+                    else:
+                        try:
+                            _cur_diag = _conn_diag.cursor(dictionary=True)
+
+                            # Total seriales sin filtro de cod_men
+                            _cur_diag.execute("""
+                                SELECT COUNT(*) AS total_rows,
+                                       COUNT(DISTINCT serial) AS seriales_unicos
+                                FROM histo
+                                WHERE (planilla = %s OR lot_esc = %s)
+                            """, (num_planilla, num_planilla))
+                            _tot = _cur_diag.fetchone()
+
+                            # Desglose por cod_men
+                            _cur_diag.execute("""
+                                SELECT cod_men,
+                                       COUNT(*) AS filas,
+                                       COUNT(DISTINCT serial) AS seriales_unicos
+                                FROM histo
+                                WHERE (planilla = %s OR lot_esc = %s)
+                                GROUP BY cod_men
+                                ORDER BY seriales_unicos DESC
+                            """, (num_planilla, num_planilla))
+                            _men_rows = _cur_diag.fetchall()
+
+                            # Grupos con serial único como Agrupacion_Escaner los crearía
+                            _cur_diag.execute("""
+                                SELECT f_esc, cod_men, lot_esc, orden, mot_esc, no_entidad,
+                                       COUNT(DISTINCT serial) AS seriales
+                                FROM histo
+                                WHERE (planilla = %s OR lot_esc = %s)
+                                GROUP BY f_esc, cod_men, lot_esc, orden, mot_esc, no_entidad
+                                ORDER BY cod_men, f_esc
+                            """, (num_planilla, num_planilla))
+                            _grupos = _cur_diag.fetchall()
+
+                            _cur_diag.close()
+                            _conn_diag.close()
+
+                            st.markdown(f"**Total filas en histo:** {_tot['total_rows']} | "
+                                        f"**Seriales únicos:** {_tot['seriales_unicos']} | "
+                                        f"**Grupos (Agrupacion_Escaner):** {len(_grupos)}")
+
+                            if _men_rows:
+                                st.markdown("**Desglose por cod_men:**")
+                                st.dataframe(pd.DataFrame(_men_rows), hide_index=True, use_container_width=True)
+
+                            if _grupos:
+                                st.markdown("**Grupos que se generarían en gestiones_mensajero:**")
+                                st.dataframe(pd.DataFrame(_grupos), hide_index=True, use_container_width=True)
+                        except Exception as e:
+                            st.error(f"Error diagnóstico: {e}")
+
                 _men_target_rec = st.selectbox(
                     "Mensajero destino para la reconstrucción",
                     options=list(opciones_mensajeros.keys()),
@@ -386,7 +444,7 @@ try:
                             _cur_rec.execute("""
                                 SELECT
                                     f_esc, cod_men, lot_esc, orden, mot_esc, no_entidad,
-                                    COUNT(*) AS total_seriales
+                                    COUNT(DISTINCT serial) AS total_seriales
                                 FROM histo
                                 WHERE (planilla = %s OR lot_esc = %s)
                                 GROUP BY f_esc, cod_men, lot_esc, orden, mot_esc, no_entidad
