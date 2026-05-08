@@ -306,7 +306,18 @@ with tab1:
                     registros_insertados = 0
                     registros_duplicados = 0
 
-                    for _, row in df.iterrows():
+                    # gestiones_mensajero solo recibe registros anteriores a mayo 2026
+                    _CORTE_GM = '2026.05.01'
+                    _f_esc_norm = df['f_esc'].astype(str).str.replace('-', '.', regex=False)
+                    _df_gm = df[_f_esc_norm < _CORTE_GM]
+                    _cnt_sg = len(df) - len(_df_gm)
+                    if _cnt_sg > 0:
+                        st.info(
+                            f"ℹ️ {_cnt_sg} fila(s) de mayo 2026+ omitidas en gestiones_mensajero. "
+                            "Procesa esas fechas desde Agrupación Escáner para que queden en seriales_gestion."
+                        )
+
+                    for _, row in _df_gm.iterrows():
                         # Verificar si ya existe la gestion (lot_esc + orden + tipo_gestion + cliente + cod_mensajero)
                         cursor.execute("""
                             SELECT id FROM gestiones_mensajero
