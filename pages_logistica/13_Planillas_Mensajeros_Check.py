@@ -331,66 +331,13 @@ try:
                             _men_row = cursor_upd.fetchone()
                             nuevo_men_id = _men_row['id'] if _men_row else None
 
-                            ids_planilla = df_busq['id'].tolist()
-                            actualizados = 0
-                            fusionados = 0
-                            eliminados_ids = []
-
-                            for gestion_id in ids_planilla:
-                                # Saltar si ya fue eliminado por fusion
-                                if gestion_id in eliminados_ids:
-                                    continue
-
-                                # Obtener datos del registro actual
-                                cursor_upd.execute("""
-                                    SELECT id, lot_esc, orden, tipo_gestion, cliente, cod_mensajero,
-                                           total_seriales, valor_unitario, valor_total, editado_manualmente
-                                    FROM gestiones_mensajero WHERE id = %s
-                                """, (gestion_id,))
-                                reg = cursor_upd.fetchone()
-
-                                if not reg or reg['cod_mensajero'] == nuevo_cod_planilla:
-                                    continue
-
-                                # Verificar si ya existe un registro con el nuevo mensajero
-                                cursor_upd.execute("""
-                                    SELECT id, total_seriales, valor_unitario, valor_total
-                                    FROM gestiones_mensajero
-                                    WHERE lot_esc = %s AND orden = %s AND tipo_gestion = %s
-                                    AND cliente = %s AND cod_mensajero = %s AND id != %s
-                                """, (reg['lot_esc'], reg['orden'], reg['tipo_gestion'],
-                                      reg['cliente'], nuevo_cod_planilla, gestion_id))
-
-                                existente = cursor_upd.fetchone()
-
-                                if existente:
-                                    # Fusionar: sumar seriales al registro existente y bloquearlo
-                                    nuevos_seriales = existente['total_seriales'] + reg['total_seriales']
-                                    nuevo_valor = nuevos_seriales * float(existente['valor_unitario'])
-
-                                    cursor_upd.execute("""
-                                        UPDATE gestiones_mensajero
-                                        SET total_seriales = %s, valor_total = %s,
-                                            editado_manualmente = 1
-                                        WHERE id = %s
-                                    """, (nuevos_seriales, nuevo_valor, existente['id']))
-
-                                    # Eliminar el registro duplicado
-                                    cursor_upd.execute("""
-                                        DELETE FROM gestiones_mensajero WHERE id = %s
-                                    """, (gestion_id,))
-
-                                    eliminados_ids.append(gestion_id)
-                                    fusionados += 1
-                                else:
-                                    # No hay duplicado, reasignar mensajero y bloquear
-                                    cursor_upd.execute("""
-                                        UPDATE gestiones_mensajero
-                                        SET cod_mensajero = %s, mensajero_id = %s,
-                                            editado_manualmente = 1
-                                        WHERE id = %s
-                                    """, (nuevo_cod_planilla, nuevo_men_id, gestion_id))
-                                    actualizados += 1
+                            # Sobreescribir TODOS los registros de la planilla con el nuevo mensajero
+                            cursor_upd.execute("""
+                                UPDATE gestiones_mensajero
+                                SET cod_mensajero = %s, mensajero_id = %s, editado_manualmente = 1
+                                WHERE lot_esc = %s
+                            """, (nuevo_cod_planilla, nuevo_men_id, num_planilla))
+                            actualizados = cursor_upd.rowcount
 
                             # Marcar la planilla como revisada para que sync no reinserte
                             cursor_upd.execute("""
@@ -402,14 +349,7 @@ try:
                             conn.commit()
                             cursor_upd.close()
 
-                            msg = f"Planilla {num_planilla}: "
-                            if actualizados > 0:
-                                msg += f"{actualizados} registro(s) reasignados"
-                            if fusionados > 0:
-                                if actualizados > 0:
-                                    msg += f", "
-                                msg += f"{fusionados} registro(s) fusionados"
-                            msg += f" a mensajero {nuevo_cod_planilla} — planilla bloqueada ✅"
+                            msg = f"Planilla {num_planilla}: {actualizados} registro(s) reasignados a mensajero {nuevo_cod_planilla} — planilla bloqueada ✅"
                             st.success(msg)
 
                             st.session_state.planilla_buscada = None
