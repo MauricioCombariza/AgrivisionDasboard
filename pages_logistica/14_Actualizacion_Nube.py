@@ -789,6 +789,19 @@ with st.expander(
                         except Exception:
                             pass  # tabla puede no existir aún
 
+                        # Fallback: personal por nombre_completo (igual que Agrupacion_Escaner)
+                        personal_por_nombre: dict = {}
+                        try:
+                            cur.execute(
+                                "SELECT codigo, nombre_completo FROM personal WHERE activo = TRUE"
+                            )
+                            personal_por_nombre = {
+                                r["nombre_completo"].upper().strip(): r["codigo"]
+                                for r in cur.fetchall()
+                            }
+                        except Exception:
+                            pass
+
                         # Mapeo de nombres de clientes del CSV a nombres en BD
                         try:
                             cur.execute(
@@ -899,8 +912,14 @@ with st.expander(
                                 f"Encontradas: {list(df_paq.columns)}"
                             )
                         else:
-                            # Mapear DA al código de mensajero registrado en BD
-                            df_paq["cod_men"] = df_paq["DA"].map(mapeo_da)
+                            # Mapear DA al código de mensajero:
+                            # 1) mapeo_da exacto; 2) fallback por nombre en personal
+                            def _resolver_da(nombre):
+                                if nombre in mapeo_da:
+                                    return mapeo_da[nombre]
+                                return personal_por_nombre.get(str(nombre).upper().strip())
+
+                            df_paq["cod_men"] = df_paq["DA"].apply(_resolver_da)
 
                             das_sin_mapeo = (
                                 df_paq[df_paq["cod_men"].isna()]["DA"].unique()
