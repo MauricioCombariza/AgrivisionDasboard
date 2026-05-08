@@ -62,6 +62,22 @@ _LG_USER = os.environ.get("DB_USER", "root")
 _LG_PASS = os.environ.get("DB_PASSWORD", "")
 _LG_NAME = os.environ.get("DB_NAME_LOGISTICA", "logistica")
 
+# BD logistica LOCAL  →  solo para leer tablas de configuración (mapeo_da, mapeo_clientes)
+# que Agrupacion_Escaner gestiona en el MySQL local (siempre en 3306).
+_LOCAL_PASS = os.environ.get("DB_PASSWORD_LOCAL", _LG_PASS)
+
+
+def _conectar_local():
+    """Conexión al MySQL local (puerto 3306) para leer tablas de configuración."""
+    try:
+        return mysql.connector.connect(
+            host="localhost", port=3306,
+            user="root", password=_LOCAL_PASS,
+            database="logistica", connect_timeout=5,
+        )
+    except Exception:
+        return None
+
 # Número máximo de filas que se descargan de 'histo' para no sobrecargar la red.
 HISTO_LIMIT = 300_000
 
@@ -775,50 +791,41 @@ with st.expander(
                     mapeo_da: dict       = {}   # DA → cod_mensajero (para paquetes iMile)
                     mapeos_cli: dict     = {}   # nombre_csv → nombre_bd (normalización clientes)
 
+                    # Normaliza sin tildes: tolera discrepancias entre Excel y BD.
+                    def _norm_name(s: str) -> str:
+                        return unicodedata.normalize("NFD", s).encode("ascii", "ignore").decode().upper().strip()
+
+                    # mapeo_da y mapeo_clientes viven en la BD LOCAL (los gestiona
+                    # Agrupacion_Escaner). No están en la nube → usar _conectar_local().
+                    conn_local = _conectar_local()
+                    if conn_local:
+                        cur_local = conn_local.cursor(dictionary=True)
+                        try:
+                            cur_local.execute("SELECT nombre_da, cod_mensajero FROM mapeo_da")
+                            mapeo_da = {r["nombre_da"]: r["cod_mensajero"] for r in cur_local.fetchall()}
+                        except Exception:
+                            pass
+                        try:
+                            cur_local.execute("SELECT nombre_csv, nombre_bd FROM mapeo_clientes")
+                            mapeos_cli = {r["nombre_csv"].upper(): r["nombre_bd"] for r in cur_local.fetchall()}
+                        except Exception:
+                            pass
+                        cur_local.close()
+                        conn_local.close()
+
+                    # personal_por_nombre: fallback cuando el DA no está en mapeo_da.
+                    # Leído desde la nube para que coincida con los códigos que usa la nube.
+                    personal_por_nombre: dict = {}
                     if conn_cl:
                         cur = conn_cl.cursor(dictionary=True)
-
-                        # Mapeo DA→mensajero (tabla mapeo_da en logistica)
                         try:
-                            cur.execute(
-                                "SELECT nombre_da, cod_mensajero FROM mapeo_da"
-                            )
-                            mapeo_da = {
-                                r["nombre_da"]: r["cod_mensajero"]
-                                for r in cur.fetchall()
-                            }
-                        except Exception:
-                            pass  # tabla puede no existir aún
-
-                        # Fallback: personal por nombre_completo (igual que Agrupacion_Escaner).
-                        # Normaliza sin tildes para tolerar discrepancias entre Excel y BD.
-                        def _norm_name(s: str) -> str:
-                            return unicodedata.normalize("NFD", s).encode("ascii", "ignore").decode().upper().strip()
-
-                        personal_por_nombre: dict = {}
-                        try:
-                            cur.execute(
-                                "SELECT codigo, nombre_completo FROM personal WHERE activo = TRUE"
-                            )
+                            cur.execute("SELECT codigo, nombre_completo FROM personal WHERE activo = TRUE")
                             personal_por_nombre = {
                                 _norm_name(r["nombre_completo"]): r["codigo"]
                                 for r in cur.fetchall()
                             }
                         except Exception:
                             pass
-
-                        # Mapeo de nombres de clientes del CSV a nombres en BD
-                        try:
-                            cur.execute(
-                                "SELECT nombre_csv, nombre_bd FROM mapeo_clientes"
-                            )
-                            mapeos_cli = {
-                                r["nombre_csv"].upper(): r["nombre_bd"]
-                                for r in cur.fetchall()
-                            }
-                        except Exception:
-                            pass
-
                         cur.close()
                         conn_cl.close()
 
