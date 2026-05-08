@@ -331,8 +331,13 @@ def sincronizar_periodo(df_periodo, conn_sync):
     actualizados = 0
     errores = []
 
+    # gestiones_mensajero solo recibe registros anteriores a mayo 2026;
+    # mayo 2026+ ya quedó en seriales_gestion vía insertar_seriales_gestion()
+    _CORTE_GM = '2026.05.01'
+    resultado_gm = resultado[resultado['f_esc'] < _CORTE_GM]
+
     import re as _re
-    for _, row in resultado.iterrows():
+    for _, row in resultado_gm.iterrows():
         try:
             lot_esc_val = str(row['lot_esc'])
 
@@ -906,11 +911,21 @@ with tab1:
                     except Exception:
                         _planillas_rev_reg = set()
 
+                    # Solo insertar en gestiones_mensajero registros anteriores a mayo 2026
+                    _CORTE_GM = '2026.05.01'
+                    df_gm = df_gestiones[df_gestiones['f_esc'] < _CORTE_GM]
+                    _cnt_sg = len(df_gestiones) - len(df_gm)
+                    if _cnt_sg > 0:
+                        st.info(
+                            f"ℹ️ {_cnt_sg} grupo(s) de mayo 2026+ van a seriales_gestion — "
+                            "no se insertan en gestiones_mensajero."
+                        )
+
                     barra = st.progress(0)
-                    total_filas = len(df_gestiones)
+                    total_filas = len(df_gm)
 
                     import re as _re
-                    for i, (_, row) in enumerate(df_gestiones.iterrows()):
+                    for i, (_, row) in enumerate(df_gm.iterrows()):
                         try:
                             lot_esc_val = str(row['lot_esc'])
                             orden_val = str(row['orden'])
