@@ -195,7 +195,7 @@ set -e
 export MYSQL_PWD='$VPS_DB_PASS'
 
 $prot_before
-mysql -u$VPS_DB_USER $db < $remote_sql
+mysql -u$VPS_DB_USER --init-command="SET FOREIGN_KEY_CHECKS=0; SET UNIQUE_CHECKS=0; SET lock_wait_timeout=30;" $db < $remote_sql
 $prot_after
 rm -f $remote_sql $remote_sh
 """
