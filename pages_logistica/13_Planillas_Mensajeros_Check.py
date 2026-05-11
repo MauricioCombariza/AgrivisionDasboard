@@ -617,6 +617,32 @@ try:
                                 )
                             conn.commit()
                             _cur_tar.close()
+                            # Refrescar planilla_buscada para que la tabla muestre
+                            # los precios recién guardados sin requerir nueva búsqueda.
+                            _cur_rf_tar = conn.cursor(dictionary=True)
+                            _cur_rf_tar.execute("""
+                                SELECT gm.id, gm.lot_esc as planilla,
+                                       gm.fecha_escaner as f_esc,
+                                       gm.total_seriales as cantidad_seriales,
+                                       gm.valor_unitario as precio,
+                                       gm.valor_total, gm.cod_mensajero,
+                                       gm.cliente, gm.tipo_gestion, gm.orden,
+                                       gm.editado_manualmente,
+                                       p.nombre_completo as nombre_mensajero,
+                                       p.tipo_personal,
+                                       p.tarifa_entrega_local   AS precio_local,
+                                       p.tarifa_entrega_nacional AS precio_nacional
+                                FROM gestiones_mensajero gm
+                                LEFT JOIN personal p ON gm.cod_mensajero = p.codigo
+                                WHERE gm.lot_esc = %s
+                                ORDER BY gm.fecha_escaner ASC
+                            """, (num_planilla,))
+                            _regs_tar = _cur_rf_tar.fetchall()
+                            _cur_rf_tar.close()
+                            st.session_state.planilla_buscada = {
+                                'numero': num_planilla,
+                                'registros': _regs_tar,
+                            }
                             st.success(
                                 f"✅ Planilla actualizada — Tarifa: ${precio_local_edit:,.0f}/serial | "
                                 f"Total: ${sum(int(r['cantidad_seriales']) * precio_local_edit for _, r in df_busq.iterrows()):,.0f}"
