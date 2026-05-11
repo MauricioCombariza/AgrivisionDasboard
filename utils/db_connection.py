@@ -23,6 +23,7 @@ DB_CONFIG_LOGISTICA = {
     "database": os.environ.get("DB_NAME_LOGISTICA", "logistica"),
     "connect_timeout": 10,
     "charset": "utf8mb4",
+    "collation": "utf8mb4_unicode_ci",
 }
 
 def get_connection(database="imile"):
