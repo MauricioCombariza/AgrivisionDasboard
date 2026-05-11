@@ -2592,13 +2592,15 @@ if _seccion == "🏙️ Facturación Ciudades":
                 if conn_bw:
                     try:
                         _ch = conn_bw.cursor(dictionary=True)
+                        # Sin filtro cod_men: la planilla identifica todos los seriales
+                        # en histo independientemente de reasignaciones en gestiones.
                         _ch.execute("""
                             SELECT COALESCE(NULLIF(TRIM(ciudad1),''), 'Sin ciudad') AS ciudad,
                                    COUNT(*) AS cnt
                             FROM histo
-                            WHERE (planilla = %s OR lot_esc = %s) AND cod_men = %s
+                            WHERE (planilla = %s OR lot_esc = %s)
                             GROUP BY ciudad
-                        """, (pl, pl, cod_men))
+                        """, (pl, pl))
                         rows_h = _ch.fetchall()
                         _ch.close()
                         for rh in rows_h:
