@@ -2560,7 +2560,9 @@ if _seccion == "🏙️ Facturación Ciudades":
                            SUM(total_seriales) AS seriales_gm,
                            MAX(editado_manualmente) AS tiene_editado,
                            AVG(CASE WHEN editado_manualmente=1 AND valor_unitario > 0
-                                    THEN valor_unitario END) AS precio_guardado
+                                    THEN valor_unitario END) AS precio_guardado,
+                           MAX(CASE WHEN editado_manualmente=1
+                                    THEN valor_unitario END) AS max_precio_editado
                     FROM gestiones_mensajero
                     WHERE cod_mensajero = %s
                       AND DATE(fecha_escaner) BETWEEN %s AND %s
@@ -2588,6 +2590,7 @@ if _seccion == "🏙️ Facturación Ciudades":
                         '_valor_total_gm': float(r.get('valor_total_gm') or 0),
                         '_seriales_gm': int(r.get('seriales_gm') or 0),
                         '_precio_guardado': float(r.get('precio_guardado') or 0),
+                        '_max_precio_editado': r.get('max_precio_editado'),
                     }
                 if conn_bw:
                     try:
@@ -2678,6 +2681,27 @@ if _seccion == "🏙️ Facturación Ciudades":
             total = cnt_l + cnt_n
             source = d['_source']
 
+            # Planilla marcada como "no real": editado=1 y todos los precios en cero.
+            _max_p = d.get('_max_precio_editado')
+            excluida = bool(d.get('_tiene_editado') and _max_p is not None and _max_p == 0)
+
+            if excluida:
+                result.append({
+                    'planilla': pl,
+                    'fecha_escaner': d.get('fecha_escaner'),
+                    'cantidad_local': cnt_l,
+                    'cantidad_nacional': cnt_n,
+                    'precio_local': 0.0,
+                    'precio_nac': 0.0,
+                    'valor_local': 0.0,
+                    'valor_nac': 0.0,
+                    'valor_total': 0.0,
+                    'bloqueada': True,
+                    'motivo': '🚫 Marcada como no real — valor $0',
+                    'excluida': True,
+                })
+                continue
+
             # Para seriales_gestion: usar precio_mensajero almacenado
             if source == 'sg':
                 p_l = d.get('_precio_local_sg', 0.0)
@@ -2734,6 +2758,7 @@ if _seccion == "🏙️ Facturación Ciudades":
                 'valor_total': v_total,
                 'bloqueada': bloqueada,
                 'motivo': motivo,
+                'excluida': False,
             })
         return result
 
@@ -2782,7 +2807,7 @@ if _seccion == "🏙️ Facturación Ciudades":
             _fc_any_blocked = False
 
             for _pi, _pp in enumerate(_fc_plist):
-                _pc1, _pc2 = st.columns([1, 14])
+                _pc1, _pc2, _pc3 = st.columns([1, 11, 2])
                 with _pc1:
                     if _pp['bloqueada']:
                         st.checkbox("", value=False, disabled=True, key=f'fc_chk_{_pi}')
@@ -2792,7 +2817,11 @@ if _seccion == "🏙️ Facturación Ciudades":
                             _fc_selected.append(_pp)
                 with _pc2:
                     _fe = _pp['fecha_escaner']
-                    if _pp['bloqueada']:
+                    if _pp.get('excluida'):
+                        st.markdown(
+                            f"~~**{_pp['planilla']}**~~ &nbsp; `{_fe}` &nbsp; 🚫 _No real — $0_"
+                        )
+                    elif _pp['bloqueada']:
                         st.markdown(
                             f"**{_pp['planilla']}** &nbsp; `{_fe}` &nbsp; 🔴 _{_pp['motivo']}_"
                         )
@@ -2805,6 +2834,42 @@ if _seccion == "🏙️ Facturación Ciudades":
                             f" × ${_pp['precio_nac']:,.0f} = **${_pp['valor_nac']:,.0f}**"
                             f" &nbsp;|&nbsp; **Total: ${_pp['valor_total']:,.0f}**"
                         )
+                with _pc3:
+                    if _pp.get('excluida'):
+                        if st.button("↩️ Restaurar", key=f'fc_restaurar_{_pi}',
+                                     help="Quitar marcado 'no real' — el sync recalculará precios"):
+                            try:
+                                _c_ex = conn.cursor()
+                                _c_ex.execute(
+                                    "UPDATE gestiones_mensajero "
+                                    "SET editado_manualmente=0 WHERE lot_esc=%s",
+                                    (_pp['planilla'],),
+                                )
+                                conn.commit()
+                                _c_ex.close()
+                                st.session_state.pop('fc_planillas', None)
+                                st.rerun()
+                            except Exception as _e_ex:
+                                conn.rollback()
+                                st.error(f"Error: {_e_ex}")
+                    elif not _pp['bloqueada']:
+                        if st.button("🚫 No real", key=f'fc_noreal_{_pi}',
+                                     help="Marcar planilla como no real — valor $0 en todos los reportes"):
+                            try:
+                                _c_ex = conn.cursor()
+                                _c_ex.execute(
+                                    "UPDATE gestiones_mensajero "
+                                    "SET valor_unitario=0, valor_total=0, editado_manualmente=1 "
+                                    "WHERE lot_esc=%s",
+                                    (_pp['planilla'],),
+                                )
+                                conn.commit()
+                                _c_ex.close()
+                                st.session_state.pop('fc_planillas', None)
+                                st.rerun()
+                            except Exception as _e_ex:
+                                conn.rollback()
+                                st.error(f"Error: {_e_ex}")
 
             if _fc_any_blocked:
                 st.warning(
