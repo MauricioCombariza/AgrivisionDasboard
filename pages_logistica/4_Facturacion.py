@@ -2549,9 +2549,13 @@ if _seccion == "🏙️ Facturación Ciudades":
                 _c = conn.cursor(dictionary=True)
                 # Incluir precio guardado: si el usuario aplicó tarifas manuales
                 # (editado_manualmente=1), usar esos valores en lugar de personal.tarifa.
+                # GROUP BY solo lot_esc para que cada planilla produzca UNA fila.
+                # Agrupación por (lot_esc, fecha) generaba filas duplicadas cuando
+                # la planilla tenía registros con distintos fecha_escaner, lo que
+                # hacía que la consulta histo sumara los seriales N veces.
                 _c.execute("""
                     SELECT lot_esc AS planilla,
-                           DATE(fecha_escaner) AS fecha_esc,
+                           MIN(DATE(fecha_escaner)) AS fecha_esc,
                            SUM(valor_total) AS valor_total_gm,
                            SUM(total_seriales) AS seriales_gm,
                            MAX(editado_manualmente) AS tiene_editado,
@@ -2560,7 +2564,7 @@ if _seccion == "🏙️ Facturación Ciudades":
                     FROM gestiones_mensajero
                     WHERE cod_mensajero = %s
                       AND DATE(fecha_escaner) BETWEEN %s AND %s
-                    GROUP BY lot_esc, DATE(fecha_escaner)
+                    GROUP BY lot_esc
                     ORDER BY fecha_esc
                 """, (cod_men, desde, hasta_gm))
                 rows_gm = _c.fetchall()
