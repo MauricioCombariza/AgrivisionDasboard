@@ -58,6 +58,12 @@ try:
         "ALTER TABLE gestiones_mensajero ADD COLUMN editado_manualmente TINYINT(1) NOT NULL DEFAULT 0",
         "ALTER TABLE personal ADD COLUMN precio_local DECIMAL(10,0) NULL DEFAULT NULL",
         "ALTER TABLE personal ADD COLUMN precio_nacional DECIMAL(10,0) NULL DEFAULT NULL",
+        # Eliminar UNIQUE KEY que causaba pérdida de registros al cambiar mensajero
+        # de planilla completa: un UPDATE masivo (cod_men A→B) fallaba con ER_DUP_ENTRY
+        # cuando ya existían filas con cod_men=B para la misma (lot_esc, orden, tipo, cliente).
+        "ALTER TABLE gestiones_mensajero DROP INDEX unique_gestion",
+        # Índice no-único de reemplazo para mantener rendimiento de búsqueda
+        "CREATE INDEX idx_gestion_lookup ON gestiones_mensajero (lot_esc, cod_mensajero, orden, tipo_gestion)",
         # Tabla para persistir la clasificación local/nacional por ciudad (courier externo)
         """CREATE TABLE IF NOT EXISTS ciudad_tipo (
             ciudad    VARCHAR(150) NOT NULL PRIMARY KEY,
@@ -233,24 +239,23 @@ try:
             _seriales_histo_hdr = None
             _valor_histo_hdr    = None
             if es_courier_externo_busq:
-                # Todos los couriers de la planilla — una planilla puede tener
-                # registros de varios cod_men (ej. 1001 y 1003 comparten 351300).
+                # Usado por la sección de ciudades más abajo; refleja gestiones actuales.
                 _cod_men_list = [str(c) for c in df_busq['cod_mensajero'].unique()]
-                _ph_men = ','.join(['%s'] * len(_cod_men_list))
                 _conn_bw_hdr = _conectar_bases_web()
                 if _conn_bw_hdr:
                     try:
                         _cur_hdr = _conn_bw_hdr.cursor(dictionary=True)
-                        # Total seriales de TODOS los couriers de la planilla
-                        _cur_hdr.execute(f"""
+                        # Sin filtro cod_men: la planilla sola identifica todos los
+                        # seriales en histo, independientemente de reasignaciones en gestiones.
+                        _cur_hdr.execute("""
                             SELECT COUNT(*) AS cnt FROM histo
-                            WHERE (planilla = %s OR lot_esc = %s) AND cod_men IN ({_ph_men})
-                        """, [num_planilla, num_planilla] + _cod_men_list)
+                            WHERE (planilla = %s OR lot_esc = %s)
+                        """, [num_planilla, num_planilla])
                         _r = _cur_hdr.fetchone()
                         _seriales_histo_hdr = int(_r['cnt']) if _r else None
 
                         # Valor usando clasificaciones guardadas en ciudad_tipo
-                        _cur_hdr.execute(f"""
+                        _cur_hdr.execute("""
                             SELECT
                                 COALESCE(NULLIF(TRIM(h.ciudad1),''),'Sin ciudad') AS ciudad,
                                 COUNT(*) AS cnt,
@@ -258,9 +263,9 @@ try:
                             FROM histo h
                             LEFT JOIN ciudad_tipo ct
                               ON TRIM(h.ciudad1) = ct.ciudad
-                            WHERE (h.planilla = %s OR h.lot_esc = %s) AND h.cod_men IN ({_ph_men})
+                            WHERE (h.planilla = %s OR h.lot_esc = %s)
                             GROUP BY ciudad, tipo
-                        """, [num_planilla, num_planilla] + _cod_men_list)
+                        """, [num_planilla, num_planilla])
                         _ciudad_rows_hdr = _cur_hdr.fetchall()
                         _cur_hdr.close()
                         _conn_bw_hdr.close()
@@ -331,66 +336,13 @@ try:
                             _men_row = cursor_upd.fetchone()
                             nuevo_men_id = _men_row['id'] if _men_row else None
 
-                            ids_planilla = df_busq['id'].tolist()
-                            actualizados = 0
-                            fusionados = 0
-                            eliminados_ids = []
-
-                            for gestion_id in ids_planilla:
-                                # Saltar si ya fue eliminado por fusion
-                                if gestion_id in eliminados_ids:
-                                    continue
-
-                                # Obtener datos del registro actual
-                                cursor_upd.execute("""
-                                    SELECT id, lot_esc, orden, tipo_gestion, cliente, cod_mensajero,
-                                           total_seriales, valor_unitario, valor_total, editado_manualmente
-                                    FROM gestiones_mensajero WHERE id = %s
-                                """, (gestion_id,))
-                                reg = cursor_upd.fetchone()
-
-                                if not reg or reg['cod_mensajero'] == nuevo_cod_planilla:
-                                    continue
-
-                                # Verificar si ya existe un registro con el nuevo mensajero
-                                cursor_upd.execute("""
-                                    SELECT id, total_seriales, valor_unitario, valor_total
-                                    FROM gestiones_mensajero
-                                    WHERE lot_esc = %s AND orden = %s AND tipo_gestion = %s
-                                    AND cliente = %s AND cod_mensajero = %s AND id != %s
-                                """, (reg['lot_esc'], reg['orden'], reg['tipo_gestion'],
-                                      reg['cliente'], nuevo_cod_planilla, gestion_id))
-
-                                existente = cursor_upd.fetchone()
-
-                                if existente:
-                                    # Fusionar: sumar seriales al registro existente y bloquearlo
-                                    nuevos_seriales = existente['total_seriales'] + reg['total_seriales']
-                                    nuevo_valor = nuevos_seriales * float(existente['valor_unitario'])
-
-                                    cursor_upd.execute("""
-                                        UPDATE gestiones_mensajero
-                                        SET total_seriales = %s, valor_total = %s,
-                                            editado_manualmente = 1
-                                        WHERE id = %s
-                                    """, (nuevos_seriales, nuevo_valor, existente['id']))
-
-                                    # Eliminar el registro duplicado
-                                    cursor_upd.execute("""
-                                        DELETE FROM gestiones_mensajero WHERE id = %s
-                                    """, (gestion_id,))
-
-                                    eliminados_ids.append(gestion_id)
-                                    fusionados += 1
-                                else:
-                                    # No hay duplicado, reasignar mensajero y bloquear
-                                    cursor_upd.execute("""
-                                        UPDATE gestiones_mensajero
-                                        SET cod_mensajero = %s, mensajero_id = %s,
-                                            editado_manualmente = 1
-                                        WHERE id = %s
-                                    """, (nuevo_cod_planilla, nuevo_men_id, gestion_id))
-                                    actualizados += 1
+                            # Sobreescribir TODOS los registros de la planilla con el nuevo mensajero
+                            cursor_upd.execute("""
+                                UPDATE gestiones_mensajero
+                                SET cod_mensajero = %s, mensajero_id = %s, editado_manualmente = 1
+                                WHERE lot_esc = %s
+                            """, (nuevo_cod_planilla, nuevo_men_id, num_planilla))
+                            actualizados = cursor_upd.rowcount
 
                             # Marcar la planilla como revisada para que sync no reinserte
                             cursor_upd.execute("""
@@ -402,21 +354,197 @@ try:
                             conn.commit()
                             cursor_upd.close()
 
-                            msg = f"Planilla {num_planilla}: "
-                            if actualizados > 0:
-                                msg += f"{actualizados} registro(s) reasignados"
-                            if fusionados > 0:
-                                if actualizados > 0:
-                                    msg += f", "
-                                msg += f"{fusionados} registro(s) fusionados"
-                            msg += f" a mensajero {nuevo_cod_planilla} — planilla bloqueada ✅"
-                            st.success(msg)
+                            # Refrescar los registros para que el usuario vea el estado
+                            # real en BD sin tener que buscar de nuevo.
+                            _cur_rf2 = conn.cursor(dictionary=True)
+                            _cur_rf2.execute("""
+                                SELECT
+                                    gm.id,
+                                    gm.lot_esc as planilla,
+                                    gm.fecha_escaner as f_esc,
+                                    gm.total_seriales as cantidad_seriales,
+                                    gm.valor_unitario as precio,
+                                    gm.valor_total,
+                                    gm.cod_mensajero,
+                                    gm.cliente,
+                                    gm.tipo_gestion,
+                                    gm.orden,
+                                    gm.editado_manualmente,
+                                    p.nombre_completo as nombre_mensajero,
+                                    p.tipo_personal,
+                                    p.tarifa_entrega_local   AS precio_local,
+                                    p.tarifa_entrega_nacional AS precio_nacional
+                                FROM gestiones_mensajero gm
+                                LEFT JOIN personal p ON gm.cod_mensajero = p.codigo
+                                WHERE gm.lot_esc = %s
+                                ORDER BY gm.fecha_escaner ASC
+                            """, (num_planilla,))
+                            _regs_rf2 = _cur_rf2.fetchall()
+                            _cur_rf2.close()
 
-                            st.session_state.planilla_buscada = None
+                            st.session_state.planilla_buscada = {
+                                'numero': num_planilla,
+                                'registros': _regs_rf2,
+                            }
+
+                            st.success(
+                                f"Planilla {num_planilla}: {actualizados} registro(s) "
+                                f"reasignados a mensajero {nuevo_cod_planilla} "
+                                f"({len(_regs_rf2)} en BD) — planilla bloqueada ✅"
+                            )
                             st.rerun()
                         except Exception as e:
                             conn.rollback()
-                            st.error(f"Error: {e}")
+                            st.error(f"Error al aplicar mensajero: {e}")
+
+            # =====================================================
+            # RECUPERAR PLANILLA DESDE bases_web (histo)
+            # =====================================================
+            with st.expander("🔄 Recuperar planilla desde bases_web (histo)", expanded=False):
+                st.caption(
+                    "Reconstruye todos los registros a partir de bases_web/histo, "
+                    "usando el agrupamiento original (cod_men original como clave). "
+                    "Útil cuando una planilla perdió registros por fusión incorrecta."
+                )
+
+                # ── Diagnóstico: qué hay en histo para esta planilla ──────────
+                # Campo de búsqueda en histo según tipo de mensajero
+                _histo_campo = 'planilla' if es_courier_externo_busq else 'lot_esc'
+                st.caption(f"Tipo: **{'courier externo → busca por planilla' if es_courier_externo_busq else 'mensajero → busca por lot_esc'}**")
+
+                if st.button("🔍 Ver diagnóstico en histo", key="btn_diag_histo"):
+                    _conn_diag = _conectar_bases_web()
+                    if not _conn_diag:
+                        st.error("No se pudo conectar a bases_web")
+                    else:
+                        try:
+                            _cur_diag = _conn_diag.cursor(dictionary=True)
+
+                            _cur_diag.execute(f"""
+                                SELECT COUNT(*) AS total_rows,
+                                       COUNT(DISTINCT serial) AS seriales_unicos
+                                FROM histo WHERE {_histo_campo} = %s
+                            """, (num_planilla,))
+                            _tot = _cur_diag.fetchone()
+
+                            _cur_diag.execute(f"""
+                                SELECT cod_men,
+                                       COUNT(DISTINCT serial) AS seriales_unicos
+                                FROM histo WHERE {_histo_campo} = %s
+                                GROUP BY cod_men ORDER BY seriales_unicos DESC
+                            """, (num_planilla,))
+                            _men_rows = _cur_diag.fetchall()
+
+                            _cur_diag.execute(f"""
+                                SELECT f_esc, cod_men, {_histo_campo} AS lot_esc_ref,
+                                       orden, mot_esc, no_entidad,
+                                       COUNT(DISTINCT serial) AS seriales
+                                FROM histo WHERE {_histo_campo} = %s
+                                GROUP BY f_esc, cod_men, {_histo_campo}, orden, mot_esc, no_entidad
+                                ORDER BY cod_men, f_esc
+                            """, (num_planilla,))
+                            _grupos = _cur_diag.fetchall()
+
+                            _cur_diag.close()
+                            _conn_diag.close()
+
+                            st.markdown(f"**Total filas en histo:** {_tot['total_rows']} | "
+                                        f"**Seriales únicos:** {_tot['seriales_unicos']} | "
+                                        f"**Grupos (Agrupacion_Escaner):** {len(_grupos)}")
+
+                            if _men_rows:
+                                st.markdown("**Desglose por cod_men:**")
+                                st.dataframe(pd.DataFrame(_men_rows), hide_index=True, use_container_width=True)
+
+                            if _grupos:
+                                st.markdown("**Grupos que se generarían en gestiones_mensajero:**")
+                                st.dataframe(pd.DataFrame(_grupos), hide_index=True, use_container_width=True)
+                        except Exception as e:
+                            st.error(f"Error diagnóstico: {e}")
+
+                _men_target_rec = st.selectbox(
+                    "Mensajero destino para la reconstrucción",
+                    options=list(opciones_mensajeros.keys()),
+                    index=0,
+                    key="select_men_recuperar"
+                )
+                _cod_target_rec = opciones_mensajeros[_men_target_rec]
+
+                if st.button("🔄 Recuperar desde bases_web", type="primary", key="btn_recuperar_histo"):
+                    _conn_rec = _conectar_bases_web()
+                    if not _conn_rec:
+                        st.error("No se pudo conectar a bases_web")
+                    else:
+                        try:
+                            _cur_rec = _conn_rec.cursor(dictionary=True)
+                            # courier_externo → planilla en histo; mensajero → lot_esc en histo
+                            _cur_rec.execute(f"""
+                                SELECT f_esc, cod_men, orden, mot_esc, no_entidad,
+                                       COUNT(DISTINCT serial) AS total_seriales
+                                FROM histo
+                                WHERE {_histo_campo} = %s
+                                GROUP BY f_esc, cod_men, {_histo_campo}, orden, mot_esc, no_entidad
+                            """, (num_planilla,))
+                            _grupos_histo = _cur_rec.fetchall()
+                            _cur_rec.close()
+                            _conn_rec.close()
+
+                            if not _grupos_histo:
+                                st.warning("No se encontraron registros en bases_web/histo para esta planilla.")
+                            else:
+                                _precio_ref = float(df_busq['precio'].astype(float).replace(0, float('nan')).mean()) if not df_busq.empty else 0.0
+                                if _precio_ref != _precio_ref:
+                                    _precio_ref = 0.0
+
+                                _cur_mg = conn.cursor(dictionary=True)
+                                _cur_mg.execute("SELECT id FROM personal WHERE codigo = %s LIMIT 1", (_cod_target_rec,))
+                                _men_id_rec = (_cur_mg.fetchone() or {}).get('id')
+                                _cur_mg.close()
+
+                                from datetime import date as _date_rec
+
+                                _cur_mg = conn.cursor()
+                                _cur_mg.execute("DELETE FROM gestiones_mensajero WHERE lot_esc = %s", (num_planilla,))
+                                _deleted = _cur_mg.rowcount
+
+                                _inserted = 0
+                                for _g in _grupos_histo:
+                                    _val_t = int(_g['total_seriales']) * _precio_ref
+                                    _cur_mg.execute("""
+                                        INSERT INTO gestiones_mensajero
+                                            (fecha_escaner, cod_mensajero, mensajero_id, lot_esc, orden,
+                                             tipo_gestion, cliente, total_seriales, valor_unitario,
+                                             valor_total, fecha_registro, editado_manualmente)
+                                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1)
+                                    """, (
+                                        _g['f_esc'], _cod_target_rec, _men_id_rec,
+                                        num_planilla, str(_g['orden']),  # lot_esc = num_planilla siempre
+                                        _g['mot_esc'], _g['no_entidad'],
+                                        int(_g['total_seriales']),
+                                        _precio_ref, _val_t,
+                                        _date_rec.today()
+                                    ))
+                                    _inserted += 1
+
+                                # Mantener planilla como revisada
+                                _cur_mg.execute("""
+                                    INSERT IGNORE INTO planillas_revisadas (lot_esc, fecha_revision)
+                                    VALUES (%s, CURDATE())
+                                """, (num_planilla,))
+
+                                conn.commit()
+                                _cur_mg.close()
+
+                                st.success(
+                                    f"✅ Planilla {num_planilla} recuperada: "
+                                    f"{_deleted} registros eliminados → {_inserted} reconstruidos "
+                                    f"con cod_men={_cod_target_rec}"
+                                )
+                                st.session_state.planilla_buscada = None
+                                st.rerun()
+                        except Exception as e:
+                            conn.rollback()
+                            st.error(f"Error al recuperar: {e}")
 
             st.divider()
 
@@ -508,9 +636,7 @@ try:
                     ciudad_tipo_guardado = {}
 
                 # ── Consultar histo: seriales de la planilla agrupados por ciudad1 ──
-                # Reutiliza _cod_men_list ya calculado en el bloque del header.
                 lot_esc_planilla = str(num_planilla)
-                _ph_men_city = ','.join(['%s'] * len(_cod_men_list))
 
                 conn_bw = _conectar_bases_web()
                 df_ciudades = pd.DataFrame()
@@ -518,16 +644,16 @@ try:
                 if conn_bw:
                     try:
                         cur_bw = conn_bw.cursor(dictionary=True)
-                        # Todos los couriers de la planilla para no perder seriales
-                        cur_bw.execute(f"""
+                        # Sin filtro cod_men para no perder seriales reasignados en gestiones
+                        cur_bw.execute("""
                             SELECT
                                 COALESCE(NULLIF(TRIM(ciudad1), ''), 'Sin ciudad') AS ciudad,
                                 COUNT(*) AS seriales
                             FROM histo
-                            WHERE (planilla = %s OR lot_esc = %s) AND cod_men IN ({_ph_men_city})
+                            WHERE (planilla = %s OR lot_esc = %s)
                             GROUP BY ciudad
                             ORDER BY seriales DESC
-                        """, [lot_esc_planilla, lot_esc_planilla] + _cod_men_list)
+                        """, [lot_esc_planilla, lot_esc_planilla])
                         rows_bw = cur_bw.fetchall()
                         cur_bw.close()
                         conn_bw.close()
