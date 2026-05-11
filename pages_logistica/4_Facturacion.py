@@ -2458,6 +2458,14 @@ if _seccion == "🏙️ Facturación Ciudades":
                 created_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (prefactura_id) REFERENCES prefacturas_courier(id)
             )""",
+            # Alinear collation de columnas ENUM con utf8mb4_0900_ai_ci (default de la
+            # conexión mysql-connector-python 8.x) para evitar error 1267.
+            """ALTER TABLE prefacturas_courier MODIFY COLUMN estado
+               ENUM('borrador','aprobada','facturada')
+               CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL DEFAULT 'borrador'""",
+            """ALTER TABLE facturas_courier_cxp MODIFY COLUMN estado
+               ENUM('pendiente','pagada','vencida')
+               CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL DEFAULT 'pendiente'""",
         ]:
             try:
                 _c = conn.cursor()
