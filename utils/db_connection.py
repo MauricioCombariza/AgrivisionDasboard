@@ -22,6 +22,7 @@ DB_CONFIG_LOGISTICA = {
     "password": os.environ.get("DB_PASSWORD", ""),
     "database": os.environ.get("DB_NAME_LOGISTICA", "logistica"),
     "connect_timeout": 10,
+    "collation": "utf8mb4_unicode_ci",  # alinea con el collation de las tablas logistica
 }
 
 def get_connection(database="imile"):
