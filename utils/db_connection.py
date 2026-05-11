@@ -22,7 +22,7 @@ DB_CONFIG_LOGISTICA = {
     "password": os.environ.get("DB_PASSWORD", ""),
     "database": os.environ.get("DB_NAME_LOGISTICA", "logistica"),
     "connect_timeout": 10,
-    "collation": "utf8mb4_unicode_ci",  # alinea con el collation de las tablas logistica
+    "charset": "utf8mb4",
 }
 
 def get_connection(database="imile"):
@@ -34,6 +34,12 @@ def get_connection(database="imile"):
     config = DB_CONFIG_LOGISTICA if database == "logistica" else DB_CONFIG_IMILE
     try:
         conn = mysql.connector.connect(**config)
+        if database == "logistica":
+            # Forzar collation_connection = utf8mb4_unicode_ci para que coincida
+            # con el collation de las tablas logistica y evitar error 1267.
+            _cur = conn.cursor()
+            _cur.execute("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci")
+            _cur.close()
         return conn
     except mysql.connector.Error as err:
         st.error(f"Error al conectar a la base de datos {database}: {err}")
