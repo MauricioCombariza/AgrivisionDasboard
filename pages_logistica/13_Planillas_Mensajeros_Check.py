@@ -58,6 +58,12 @@ try:
         "ALTER TABLE gestiones_mensajero ADD COLUMN editado_manualmente TINYINT(1) NOT NULL DEFAULT 0",
         "ALTER TABLE personal ADD COLUMN precio_local DECIMAL(10,0) NULL DEFAULT NULL",
         "ALTER TABLE personal ADD COLUMN precio_nacional DECIMAL(10,0) NULL DEFAULT NULL",
+        # Eliminar UNIQUE KEY que causaba pérdida de registros al cambiar mensajero
+        # de planilla completa: un UPDATE masivo (cod_men A→B) fallaba con ER_DUP_ENTRY
+        # cuando ya existían filas con cod_men=B para la misma (lot_esc, orden, tipo, cliente).
+        "ALTER TABLE gestiones_mensajero DROP INDEX unique_gestion",
+        # Índice no-único de reemplazo para mantener rendimiento de búsqueda
+        "CREATE INDEX idx_gestion_lookup ON gestiones_mensajero (lot_esc, cod_mensajero, orden, tipo_gestion)",
         # Tabla para persistir la clasificación local/nacional por ciudad (courier externo)
         """CREATE TABLE IF NOT EXISTS ciudad_tipo (
             ciudad    VARCHAR(150) NOT NULL PRIMARY KEY,
@@ -349,14 +355,48 @@ try:
                             conn.commit()
                             cursor_upd.close()
 
-                            msg = f"Planilla {num_planilla}: {actualizados} registro(s) reasignados a mensajero {nuevo_cod_planilla} — planilla bloqueada ✅"
-                            st.success(msg)
+                            # Refrescar los registros para que el usuario vea el estado
+                            # real en BD sin tener que buscar de nuevo.
+                            _cur_rf2 = conn.cursor(dictionary=True)
+                            _cur_rf2.execute("""
+                                SELECT
+                                    gm.id,
+                                    gm.lot_esc as planilla,
+                                    gm.fecha_escaner as f_esc,
+                                    gm.total_seriales as cantidad_seriales,
+                                    gm.valor_unitario as precio,
+                                    gm.valor_total,
+                                    gm.cod_mensajero,
+                                    gm.cliente,
+                                    gm.tipo_gestion,
+                                    gm.orden,
+                                    gm.editado_manualmente,
+                                    p.nombre_completo as nombre_mensajero,
+                                    p.tipo_personal,
+                                    p.tarifa_entrega_local   AS precio_local,
+                                    p.tarifa_entrega_nacional AS precio_nacional
+                                FROM gestiones_mensajero gm
+                                LEFT JOIN personal p ON gm.cod_mensajero = p.codigo
+                                WHERE gm.lot_esc = %s
+                                ORDER BY gm.fecha_escaner ASC
+                            """, (num_planilla,))
+                            _regs_rf2 = _cur_rf2.fetchall()
+                            _cur_rf2.close()
 
-                            st.session_state.planilla_buscada = None
+                            st.session_state.planilla_buscada = {
+                                'numero': num_planilla,
+                                'registros': _regs_rf2,
+                            }
+
+                            st.success(
+                                f"Planilla {num_planilla}: {actualizados} registro(s) "
+                                f"reasignados a mensajero {nuevo_cod_planilla} "
+                                f"({len(_regs_rf2)} en BD) — planilla bloqueada ✅"
+                            )
                             st.rerun()
                         except Exception as e:
                             conn.rollback()
-                            st.error(f"Error: {e}")
+                            st.error(f"Error al aplicar mensajero: {e}")
 
             # =====================================================
             # RECUPERAR PLANILLA DESDE bases_web (histo)
