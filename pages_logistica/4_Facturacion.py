@@ -2547,8 +2547,16 @@ if _seccion == "🏙️ Facturación Ciudades":
             hasta_gm = min(hasta, _CORTE_SG_FC - timedelta(days=1))
             try:
                 _c = conn.cursor(dictionary=True)
+                # Incluir precio guardado: si el usuario aplicó tarifas manuales
+                # (editado_manualmente=1), usar esos valores en lugar de personal.tarifa.
                 _c.execute("""
-                    SELECT lot_esc AS planilla, DATE(fecha_escaner) AS fecha_esc
+                    SELECT lot_esc AS planilla,
+                           DATE(fecha_escaner) AS fecha_esc,
+                           SUM(valor_total) AS valor_total_gm,
+                           SUM(total_seriales) AS seriales_gm,
+                           MAX(editado_manualmente) AS tiene_editado,
+                           AVG(CASE WHEN editado_manualmente=1 AND valor_unitario > 0
+                                    THEN valor_unitario END) AS precio_guardado
                     FROM gestiones_mensajero
                     WHERE cod_mensajero = %s
                       AND DATE(fecha_escaner) BETWEEN %s AND %s
@@ -2572,6 +2580,10 @@ if _seccion == "🏙️ Facturación Ciudades":
                         'cantidad_nacional': 0,
                         '_source': 'gm',
                         '_histo_ok': False,
+                        '_tiene_editado': bool(r.get('tiene_editado')),
+                        '_valor_total_gm': float(r.get('valor_total_gm') or 0),
+                        '_seriales_gm': int(r.get('seriales_gm') or 0),
+                        '_precio_guardado': float(r.get('precio_guardado') or 0),
                     }
                 if conn_bw:
                     try:
@@ -2666,8 +2678,15 @@ if _seccion == "🏙️ Facturación Ciudades":
                 p_n = d.get('_precio_nac_sg', 0.0)
                 v_l = d.get('_valor_local_sg', 0.0)
                 v_n = d.get('_valor_nac_sg', 0.0)
+            elif d.get('_tiene_editado') and d.get('_precio_guardado', 0) > 0:
+                # Planilla con precios guardados manualmente en gestiones: usar
+                # el precio promedio de los registros editados (no personal.tarifa).
+                p_l = d['_precio_guardado']
+                p_n = d['_precio_guardado']
+                v_l = cnt_l * p_l
+                v_n = cnt_n * p_n
             else:
-                # Para gestiones_mensajero: calcular con tarifas de personal
+                # Sin precios guardados: calcular con tarifas de personal
                 p_l = tarifa_local
                 p_n = tarifa_nac
                 v_l = cnt_l * tarifa_local
