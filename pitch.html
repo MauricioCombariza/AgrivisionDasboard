@@ -1,0 +1,1082 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AgriVision — El Médico · CEIS Fase 2 · 2026</title>
+
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/black.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <style>
+    /* ── Brand tokens ─────────────────────────────────── */
+    :root {
+      --verde:        #0f2519;
+      --verde-deep:   #080e0a;
+      --verde-mid:    #1a3d28;
+      --dorado:       #d4900a;
+      --dorado-dim:   rgba(212,144,10,0.18);
+      --crema:        #f5f0e8;
+      --crema-dim:    rgba(245,240,232,0.55);
+    }
+
+    /* ── Reveal overrides ─────────────────────────────── */
+    .reveal-viewport           { background: var(--verde); }
+    .reveal                    { font-family: 'DM Sans', 'Helvetica Neue', Arial, sans-serif; color: var(--crema); }
+    .reveal h1,
+    .reveal h2,
+    .reveal h3                 { font-family: 'Cormorant Garamond', Georgia, serif; color: var(--crema); text-transform: none; text-shadow: none; letter-spacing: 0.02em; line-height: 1.15; }
+    .reveal .slides section    { text-align: left; padding: 44px 72px; box-sizing: border-box; }
+    .reveal .slides > section,
+    .reveal .slides > section > section { height: 100%; }
+
+    /* ── Progress & controls off ──────────────────────── */
+    .reveal .progress           { display: none !important; }
+
+    /* ── Timer pill (press T) ─────────────────────────── */
+    #pitch-timer {
+      display: none;
+      position: fixed;
+      top: 18px; right: 22px;
+      font-family: 'DM Mono', monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.12em;
+      color: var(--dorado);
+      opacity: 0.55;
+      z-index: 9999;
+    }
+
+    /* ── Slide number (subtle) ────────────────────────── */
+    .reveal .slide-number {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.55rem;
+      color: var(--dorado);
+      opacity: 0.3;
+      background: transparent;
+      bottom: 18px; right: 24px;
+    }
+
+    /* ── Reusable components ──────────────────────────── */
+    .gold-bar {
+      width: 44px; height: 3px;
+      background: var(--dorado);
+      margin-bottom: 16px;
+      opacity: 0.85;
+    }
+
+    .label {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.65em;
+      font-weight: 400;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--dorado);
+      margin: 0 0 12px;
+    }
+
+    .quote {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 1.5em;
+      font-style: italic;
+      font-weight: 400;
+      line-height: 1.4;
+      color: var(--crema);
+      max-width: 820px;
+    }
+
+    .si-senor {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.95em;
+      color: var(--dorado);
+      letter-spacing: 0.08em;
+      margin-top: 20px;
+    }
+
+    .big-stat {
+      font-family: 'Cormorant Garamond', serif;
+      font-weight: 700;
+      color: var(--dorado);
+      line-height: 1;
+    }
+
+    .stat-label {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.68em;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--crema);
+      opacity: 0.55;
+      margin-top: 6px;
+    }
+
+    /* ── Photo slide overlay ──────────────────────────── */
+    .photo-overlay {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(8,14,10,0.80) 0%, rgba(15,37,25,0.65) 100%);
+      z-index: 0;
+    }
+    .photo-content {
+      position: relative;
+      z-index: 1;
+    }
+
+    /* ── Stats grid ───────────────────────────────────── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 48px;
+      margin-top: 36px;
+    }
+
+    /* ── Timeline ─────────────────────────────────────── */
+    .timeline {
+      display: flex;
+      gap: 0;
+      margin-top: 32px;
+    }
+    .tl-node {
+      flex: 1;
+      padding-right: 16px;
+    }
+    .tl-node:not(:last-child) { border-right: 1px solid var(--dorado-dim); margin-right: 16px; }
+    .tl-date {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.62em;
+      color: var(--dorado);
+      letter-spacing: 0.1em;
+      margin-bottom: 8px;
+    }
+    .tl-text {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.72em;
+      color: var(--crema);
+      opacity: 0.7;
+      line-height: 1.45;
+    }
+
+    /* ── Process cards ────────────────────────────────── */
+    .process {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+      margin-top: 32px;
+    }
+    .p-card {
+      background: var(--dorado-dim);
+      border: 1px solid rgba(212,144,10,0.18);
+      border-radius: 8px;
+      padding: 24px 20px;
+    }
+    .p-num {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.6em;
+      color: var(--dorado);
+      opacity: 0.55;
+      margin-bottom: 10px;
+    }
+    .p-title {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.8em;
+      font-weight: 500;
+      color: var(--crema);
+      line-height: 1.35;
+    }
+    .p-detail {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.65em;
+      color: var(--crema);
+      opacity: 0.5;
+      margin-top: 8px;
+      line-height: 1.4;
+    }
+
+    /* ── Revenue rows ─────────────────────────────────── */
+    .rev-row {
+      display: flex;
+      align-items: baseline;
+      gap: 20px;
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(212,144,10,0.12);
+    }
+    .rev-scale {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.65em;
+      color: var(--dorado);
+      opacity: 0.55;
+      min-width: 110px;
+    }
+    .rev-amount {
+      font-family: 'Cormorant Garamond', serif;
+      font-size: 2.2em;
+      font-weight: 700;
+      color: var(--crema);
+      line-height: 1;
+    }
+    .rev-suffix {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.68em;
+      color: var(--crema);
+      opacity: 0.45;
+    }
+
+    /* ── Hitos list ───────────────────────────────────── */
+    .hito-row {
+      display: flex;
+      gap: 20px;
+      align-items: flex-start;
+      padding: 14px 0;
+      border-bottom: 1px solid rgba(212,144,10,0.10);
+    }
+    .hito-num {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.65em;
+      color: var(--dorado);
+      opacity: 0.55;
+      min-width: 24px;
+      margin-top: 3px;
+    }
+    .hito-body p { margin: 0; }
+    .hito-title {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.9em;
+      font-weight: 500;
+      color: var(--crema);
+      line-height: 1.4;
+    }
+    .hito-sub {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.7em;
+      color: var(--crema);
+      opacity: 0.5;
+      margin-top: 4px !important;
+      line-height: 1.4;
+    }
+
+    /* ── Reto rows ────────────────────────────────────── */
+    .reto-row {
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+      padding: 12px 0;
+      border-bottom: 1px solid rgba(212,144,10,0.08);
+    }
+    .reto-arrow {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.75em;
+      color: var(--dorado);
+      opacity: 0.6;
+      min-width: 20px;
+      margin-top: 2px;
+    }
+    .reto-text {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.88em;
+      color: var(--crema);
+      line-height: 1.5;
+    }
+
+    /* ── Center helper ────────────────────────────────── */
+    .c { text-align: center; }
+    .reveal .slides section.center-slide { text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+
+    /* ── Geo tags ─────────────────────────────────────── */
+    .geo-tags {
+      display: flex;
+      gap: 28px;
+      margin-top: 36px;
+    }
+    .geo-tag {
+      font-family: 'DM Mono', monospace;
+      font-size: 0.8em;
+      color: var(--crema);
+      opacity: 0.4;
+      letter-spacing: 0.1em;
+    }
+
+    /* ── Logo SVG inline ──────────────────────────────── */
+    .logo-inline { display: block; }
+
+    /* ── Auto-slide UI ────────────────────────────────── */
+    #auto-indicator {
+      position: fixed;
+      bottom: 18px; left: 22px;
+      font-family: 'DM Mono', monospace;
+      font-size: 0.6rem;
+      letter-spacing: 0.2em;
+      color: var(--dorado);
+      opacity: 0;
+      z-index: 9999;
+      transition: opacity 0.3s;
+      pointer-events: none;
+    }
+    #slide-progress {
+      position: fixed;
+      top: 0; left: 0;
+      height: 2px;
+      width: 100%;
+      background: var(--dorado);
+      opacity: 0;
+      transform-origin: left;
+      z-index: 9999;
+      pointer-events: none;
+    }
+    .reveal .slide-number,
+    .reveal aside.controls { display: none !important; }
+  </style>
+</head>
+<body>
+
+<div id="pitch-timer">0:00</div>
+<div id="auto-indicator">AUTO ▶</div>
+<div id="slide-progress"></div>
+
+<div class="reveal">
+  <div class="slides">
+
+    <!-- ══════════════════════════════════════════
+         S01 · PORTADA
+         Antes de empezar — pantalla en silencio
+    ══════════════════════════════════════════ -->
+    <section class="center-slide" data-background-color="#080e0a">
+      <svg class="logo-inline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 56" fill="none" style="width:300px; margin-bottom:40px;">
+        <rect width="300" height="56" rx="9" fill="#0f2519"/>
+        <rect x="0" y="52" width="300" height="4" rx="0" fill="#d4900a" opacity="0.6"/>
+        <rect x="0" y="47" width="300" height="9" rx="0" fill="#d4900a" opacity="0.15"/>
+        <g transform="translate(10,9) scale(1.357)">
+          <path d="M14 3C14 3 6 9.5 6 17C6 21.4 9.6 25 14 25C18.4 25 22 21.4 22 17C22 9.5 14 3 14 3Z" fill="#d4900a" opacity="0.9"/>
+          <path d="M14 8L14 25" stroke="#0f2519" stroke-width="1.4" stroke-linecap="round"/>
+          <path d="M14 14C14 14 10.5 11.5 8.5 13.5" stroke="#0f2519" stroke-width="1.4" stroke-linecap="round"/>
+          <path d="M14 18.5C14 18.5 17.5 16 19.5 18" stroke="#0f2519" stroke-width="1.4" stroke-linecap="round"/>
+        </g>
+        <line x1="62" y1="10" x2="62" y2="46" stroke="#d4900a" stroke-width="0.8" opacity="0.4"/>
+        <text x="72" y="31" font-family="'DM Sans','Helvetica Neue',Arial,sans-serif" font-size="22" font-weight="600" fill="#f5f0e8" letter-spacing="0.6">AgriVision</text>
+        <text x="72" y="45" font-family="'DM Sans','Helvetica Neue',Arial,sans-serif" font-size="9" font-weight="400" fill="#d4900a" letter-spacing="1.1">DATOS DEL CAMPO. DECISIONES ACERTADAS.</text>
+      </svg>
+      <div style="width:1px; height:48px; background:rgba(212,144,10,0.25); margin:0 auto 28px;"></div>
+      <p style="font-family:'Cormorant Garamond',serif; font-size:1.35em; font-style:italic; color:var(--crema-dim); margin:0;">El Médico</p>
+      <p style="font-family:'DM Mono',monospace; font-size:0.58em; letter-spacing:0.22em; color:rgba(212,144,10,0.35); margin-top:14px;">CEIS · MAYO 2026 · 5 MIN</p>
+
+      <aside class="notes">Pantalla en negro. Silencio. Empieza cuando el público esté quieto. Presiona T para activar el timer.</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S02 · EL PACIENTE
+         0:00 — Apertura
+         📷 Reemplaza con foto aérea Sabana Norte
+    ══════════════════════════════════════════ -->
+    <section
+      data-background-image="https://images.unsplash.com/photo-1416879595882-3373a0480b5b?w=1920&q=80&fit=crop"
+      data-background-color="#0f2519"
+      data-background-opacity="0.22">
+      <div class="gold-bar"></div>
+      <p class="label">El paciente</p>
+      <h2 style="font-size:2.2em; white-space:nowrap;">Floricultora colombiana.</h2>
+      <div style="display:flex; gap:60px; margin-top:28px; align-items:flex-end;">
+        <div>
+          <div class="big-stat" style="font-size:3.2em;">10.000 ha</div>
+          <div class="stat-label">cultivadas en Colombia · +600 exportadoras</div>
+        </div>
+        <div>
+          <div class="big-stat" style="font-size:3.2em;">#2</div>
+          <div class="stat-label">exportador mundial</div>
+        </div>
+      </div>
+      <p style="font-family:'DM Mono',monospace; font-size:0.7em; color:var(--dorado); opacity:0.6; margin-top:20px; letter-spacing:0.16em;">
+        ESTADOS UNIDOS · HOLANDA · JAPÓN
+      </p>
+
+      <aside class="notes">0:00 — "Vengo a presentarles un paciente." Tono de médico preocupado, casi compasivo.</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S03 · EL SÍNTOMA
+         0:20
+    ══════════════════════════════════════════ -->
+    <section data-background-color="#0f2519">
+      <div class="gold-bar"></div>
+      <p class="label">Síntoma principal</p>
+      <div class="quote">
+        "Toma decisiones de cien millones de pesos cada semana basándose en la sensación de su agrónomo."
+      </div>
+      <p class="si-senor" style="margin-top:32px; font-size:0.85em; opacity:0.45;">
+        — y no sabe que está enfermo.
+      </p>
+
+      <aside class="notes">0:20 — Pausa clínica. "Cree que el 'más o menos' es inevitable. Cree que perder el 25% de una temporada es mala suerte, no un problema de datos."</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S04 · DIAGNÓSTICO INICIAL
+         0:40
+    ══════════════════════════════════════════ -->
+    <section class="center-slide" data-background-color="#080e0a">
+      <p class="label c" style="margin-bottom:28px;">Diagnóstico</p>
+      <h2 style="font-size:3.1em; text-align:center; line-height:1.15;">Ceguera de datos aguda.</h2>
+      <h2 style="font-size:3.1em; text-align:center; line-height:1.15; color:var(--dorado);">Fase crónica.</h2>
+
+      <aside class="notes">0:40 — Decirlo despacio. Con peso clínico. Pausa larga.</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S05 · ANAMNESIS — EL SECTOR
+         0:45
+    ══════════════════════════════════════════ -->
+    <section data-background-color="#0f2519">
+      <div class="gold-bar"></div>
+      <p class="label">Anamnesis · Colombia Floricultura 2025</p>
+      <div class="stats-grid">
+        <div>
+          <div class="big-stat" style="font-size:2.4em;">USD 2.500M</div>
+          <div class="stat-label">exportaciones 2025 — récord histórico</div>
+        </div>
+        <div>
+          <div class="big-stat" style="font-size:2.4em;">200.000</div>
+          <div class="stat-label">familias empleadas</div>
+        </div>
+        <div>
+          <div class="big-stat" style="font-size:2.4em;">+600</div>
+          <div class="stat-label">floricultoras exportadoras · solo Cundinamarca</div>
+        </div>
+      </div>
+
+      <aside class="notes">0:45 — "Voy a mostrarles el dato que ninguno de ustedes sabe." Tono de médico dictando el historial. El paciente ideal: el gerente que ya perdió una temporada.</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S06 · LA VENTANA CRÍTICA
+         0:55 — EL insight que nadie sabe
+    ══════════════════════════════════════════ -->
+    <section data-background-color="#0f2519">
+      <div class="gold-bar"></div>
+      <p class="label">La ventana crítica · San Valentín</p>
+      <h3 style="font-size:2em; max-width:720px;">
+        El gerente confirma el pedido cuando las flores<br/>
+        <span style="color:var(--dorado);">todavía están creciendo en el campo.</span>
+      </h3>
+      <div class="timeline">
+        <div class="tl-node">
+          <div class="tl-date">20 ENE</div>
+          <div class="tl-text">Confirma el pedido<br/>(flores en campo)</div>
+        </div>
+        <div class="tl-node">
+          <div class="tl-date">28 ENE – 5 FEB</div>
+          <div class="tl-text">Corte<br/>Sabana Norte</div>
+        </div>
+        <div class="tl-node">
+          <div class="tl-date" style="color:var(--dorado);">1 FEB</div>
+          <div class="tl-text" style="color:var(--dorado); opacity:1;">Sale de<br/>El Dorado</div>
+        </div>
+        <div class="tl-node">
+          <div class="tl-date">8 – 13 FEB</div>
+          <div class="tl-text">Cadena de frío<br/>EE.UU.</div>
+        </div>
+        <div class="tl-node" style="border-right:none; margin-right:0;">
+          <div class="tl-date">14 FEB</div>
+          <div class="tl-text">Florero<br/>Manhattan</div>
+        </div>
+      </div>
+
+      <aside class="notes">0:55 — Pausa antes de "El primero." El público no sabe esto. Es tu credibilidad de campo en una sola frase.</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S07 · EL PROBLEMA EN UNA FRASE
+         1:10
+    ══════════════════════════════════════════ -->
+    <section class="center-slide" data-background-color="#0f2519">
+      <div class="quote" style="text-align:center; max-width:820px;">
+        Confirma con datos de hoy cuántas flores tendrá disponibles para cortar en dos semanas.
+      </div>
+      <p class="si-senor" style="text-align:center; font-size:0.85em; opacity:0.5; margin-top:40px;">
+        Con el ojo del agrónomo. Con un Excel. Con fe.
+      </p>
+
+      <aside class="notes">1:10 — Pausa grave. Dejar que caiga.</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S08 · ¿SÍ SEÑOR? — 1
+         1:20 — Diagnóstico Doloran
+    ══════════════════════════════════════════ -->
+    <section data-background-color="#0f2519">
+      <div class="gold-bar"></div>
+      <p class="label">Diagnóstico · Comercial</p>
+      <h3 style="font-size:1.55em; line-height:1.3; max-width:860px;">
+        ¿El 20 de enero no sabía cuántas flores tendría listas para el 1 de febrero?
+      </h3>
+      <p class="si-senor">Sí señor.</p>
+
+      <aside class="notes">1:20 — Tono de comercial de TV. Esperar que el público asienta. No apresurarlo.</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S09 · ¿SÍ SEÑOR? — 2
+         1:35
+    ══════════════════════════════════════════ -->
+    <section data-background-color="#0f2519">
+      <div class="gold-bar"></div>
+      <h3 style="font-size:1.55em; line-height:1.3; max-width:860px;">
+        ¿Confirmó el pedido a Miami con un <em style="color:var(--dorado);">"más o menos cuarenta y cinco mil"</em> del agrónomo?
+      </h3>
+      <p class="si-senor">Sí señor.</p>
+
+      <aside class="notes">1:35 — La risa es parte del ritmo. No apresurarlo.</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S10 · SÍ SEÑOR — 3
+         1:50
+    ══════════════════════════════════════════ -->
+    <section data-background-color="#0f2519">
+      <div class="gold-bar"></div>
+      <h3 style="font-size:1.55em; line-height:1.3; max-width:860px;">
+        ¿El 5 de febrero resultaron treinta y ocho mil, y el cliente en Miami esperaba cincuenta?
+      </h3>
+      <p class="si-senor">Sí señor.</p>
+
+      <aside class="notes">1:50 — El público empieza a reconocerse. Bajar la voz. "Tranquilo."</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S11 · SÍ SEÑOR — 4
+         2:00
+    ══════════════════════════════════════════ -->
+    <section data-background-color="#0f2519">
+      <div class="gold-bar"></div>
+      <h3 style="font-size:1.55em; line-height:1.3; max-width:860px;">
+        ¿Tiene 300 empleados haciendo horas extras porque salieron <em style="color:var(--dorado);">15% más flores</em> de las que usted estimó?
+      </h3>
+      <p class="si-senor">Sí señor</p>
+
+      <aside class="notes">2:00 — Bajar la voz. Tono de médico que cierra el diagnóstico.</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S12 · DIAGNÓSTICO COMPLETO
+         2:05
+    ══════════════════════════════════════════ -->
+    <section class="center-slide" data-background-color="#080e0a">
+      <p class="label c">El cuadro clínico está claro.</p>
+      <h2 style="font-size:2.1em; text-align:center; line-height:1.25; margin-top:20px;">
+        Ceguera de datos aguda.<br/>Fase crónica.<br/>
+        <span style="color:var(--dorado);">Con complicaciones logísticas.</span>
+      </h2>
+      <p style="font-family:'DM Sans',sans-serif; font-size:1em; color:var(--crema-dim); text-align:center; margin-top:28px;">
+        Tiene tratamiento.
+      </p>
+
+      <aside class="notes">2:05 — Cambio total de tono. Seguro, casi divertido. Pausa antes de "Tiene tratamiento."</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S13 · AGRIVISION — EL TRATAMIENTO
+         2:15
+         📷 Reemplaza con foto técnico en campo con celular
+    ══════════════════════════════════════════ -->
+    <section
+      data-background-image="yolo_apple.png"
+      data-background-color="#0f2519"
+      data-background-opacity="0.18">
+      <div class="gold-bar"></div>
+      <p class="label">El tratamiento</p>
+      <p style="font-family:'Cormorant Garamond',serif; font-size:2.5em; font-weight:600; line-height:1.6; white-space:nowrap; color:var(--crema);">
+        Una foto.<br/>
+        <span style="color:var(--dorado);">Datos reales.</span><br/>
+        En menos de 30 segundos.
+      </p>
+
+      <aside class="notes">2:15 — Levantar el celular. Cada frase con pausa. Ritmo de prescripción médica. S.T.A.R. moment.</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S14 · CÓMO FUNCIONA
+         2:35
+    ══════════════════════════════════════════ -->
+    <section data-background-color="#0f2519">
+      <div class="gold-bar"></div>
+      <p class="label">Protocolo</p>
+      <div class="process">
+        <div class="p-card">
+          <div class="p-num">01</div>
+          <div class="p-title">Técnico toma video del lote</div>
+          <div class="p-detail">Con el celular que ya tiene en el bolsillo.</div>
+        </div>
+        <div class="p-card">
+          <div class="p-num">02</div>
+          <div class="p-title">Visión por computadora</div>
+          <div class="p-detail">Botón · apertura · listo para corte. Estado fisiológico de cada planta.</div>
+        </div>
+        <div class="p-card">
+          <div class="p-num">03</div>
+          <div class="p-title">Proyección de disponibilidad</div>
+          <div class="p-detail">7 días · 14 días · 28 días.</div>
+        </div>
+        <div class="p-card">
+          <div class="p-num">04</div>
+          <div class="p-title">El gerente decide</div>
+          <div class="p-detail">A finales de enero. Con datos reales. Sin rezar.</div>
+        </div>
+      </div>
+
+      <aside class="notes">2:35 — Claro y directo. No explicar el stack técnico. "El tratamiento no requiere hospitalización."</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S15 · SIN HARDWARE
+         2:50
+    ══════════════════════════════════════════ -->
+    <section data-background-color="#0f2519">
+      <div class="gold-bar"></div>
+      <p class="label">Ventaja operativa</p>
+      <h2 style="font-size:2.4em; line-height:1.15;">
+        Sin hardware. Sin sensores.
+      </h2>
+      <h2 style="font-size:2.4em; line-height:1.15; color:var(--dorado); margin-top:10px;">
+        Solo el celular del técnico.
+      </h2>
+      <p style="font-family:'DM Sans',sans-serif; font-size:0.9em; color:var(--crema); opacity:0.5; margin-top:32px; line-height:1.7;">
+        Sin instalación. Sin capacitación extendida.<br/>Sin cambiar el flujo de trabajo.
+      </p>
+
+      <aside class="notes">2:50 — "No hay efectos secundarios. El paciente puede seguir trabajando mientras se recupera."</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S16 · TRACCIÓN Y VENTAS
+         3:00 — Nuevo: el tratamiento ya está en campo
+    ══════════════════════════════════════════ -->
+    <section data-background-color="#0f2519">
+      <div class="gold-bar"></div>
+      <p class="label">Tracción · El tratamiento ya está en campo</p>
+      <div style="display:flex; gap:72px; margin-top:24px; align-items:flex-end;">
+        <div>
+          <div class="big-stat" style="font-size:4em;">1</div>
+          <div class="stat-label">piloto activo · Sabana Norte</div>
+        </div>
+        <div>
+          <div class="big-stat" style="font-size:2.6em; color:var(--crema); opacity:0.65;">+600</div>
+          <div class="stat-label">floricultoras en el mercado objetivo</div>
+        </div>
+      </div>
+      <p style="font-family:'DM Mono',monospace; font-size:0.7em; color:var(--dorado); opacity:0.6; margin-top:32px; letter-spacing:0.14em;">
+        EL PACIENTE ESTÁ RESPONDIENDO AL TRATAMIENTO.
+      </p>
+
+      <aside class="notes">3:00 — "El tratamiento ya está en campo. Primer piloto activo con una floricultora de la Sabana Norte. El paciente está respondiendo al tratamiento."</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S17 · DREAM TEAM
+         3:15 — Por qué este médico
+    ══════════════════════════════════════════ -->
+    <section data-background-color="#0f2519">
+      <div class="gold-bar"></div>
+      <p class="label">Dream Team · ¿Por qué este médico?</p>
+      <h2 style="font-size:1.95em; line-height:1.2;">
+        Diez años en esos cultivos.
+      </h2>
+      <h2 style="font-size:1.95em; line-height:1.2; color:var(--dorado);">
+        Vi la enfermedad desde adentro.
+      </h2>
+      <p style="font-family:'DM Sans',sans-serif; font-size:0.88em; color:var(--crema); opacity:0.65; margin-top:24px; line-height:1.7; max-width:680px;">
+        Experiencia de campo + inteligencia artificial.<br/>
+        Ese activo no se copia rápido.
+      </p>
+      <p style="font-family:'DM Mono',monospace; font-size:0.68em; color:var(--dorado); opacity:0.45; margin-top:20px; letter-spacing:0.12em;">
+        LTV : CAC · 500 : 1
+      </p>
+
+      <aside class="notes">3:15 — "¿Por qué este médico? Diez años en esos cultivos. Vi la enfermedad desde adentro, antes de tener el tratamiento. Esa combinación — experiencia de campo más inteligencia artificial — ese activo no se copia rápido."</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S18 · ESCALABILIDAD + URGENCIA
+         3:35
+    ══════════════════════════════════════════ -->
+    <section data-background-color="#0f2519">
+      <div class="gold-bar" style="opacity:0.45;"></div>
+      <p class="label">Escalabilidad</p>
+      <h3 style="font-size:1.75em; line-height:1.3;">
+        Flores hoy.<br/>
+        <span style="color:var(--dorado);">Tomates, espárragos, rosas de campo — mañana.</span>
+      </h3>
+      <div class="geo-tags" style="margin-top:24px;">
+        <span class="geo-tag">Kenia</span>
+        <span class="geo-tag">·</span>
+        <span class="geo-tag">Holanda</span>
+        <span class="geo-tag">·</span>
+        <span class="geo-tag">Israel</span>
+      </div>
+      <p style="font-family:'DM Sans',sans-serif; font-size:0.88em; color:var(--dorado); margin-top:14px; letter-spacing:0.04em;">
+        Ya está pasando. Colombia tiene una ventana. <strong>No es eterna.</strong>
+      </p>
+
+      <aside class="notes">3:35 — "Flores hoy. Tomates, espárragos, rosas de campo — mañana. Ya está pasando en Kenia. En Holanda. En Israel. Colombia tiene una ventana. No es eterna."</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S19 · PRESCRIPCIÓN — LOS NÚMEROS
+         3:45
+    ══════════════════════════════════════════ -->
+    <section data-background-color="#0f2519">
+      <div class="gold-bar"></div>
+      <p class="label">La prescripción</p>
+      <div class="rev-row">
+        <div class="rev-scale">1 cliente · 100 ha</div>
+        <div class="rev-amount">$14–18M</div>
+        <div class="rev-suffix">COP / mes &nbsp;·&nbsp; margen &gt;70%</div>
+      </div>
+      <div class="rev-row">
+        <div class="rev-scale">10 clientes</div>
+        <div class="rev-amount">$150M</div>
+        <div class="rev-suffix">COP / mes</div>
+      </div>
+      <div class="rev-row" style="border-bottom:none;">
+        <div class="rev-scale">30 clientes</div>
+        <div class="rev-amount">$450M</div>
+        <div class="rev-suffix">COP / mes</div>
+      </div>
+      <p style="font-family:'DM Sans',sans-serif; font-size:0.78em; color:var(--crema); opacity:0.5; margin-top:28px; line-height:1.6;">
+        Un cliente genera <strong style="color:var(--dorado);">$540M en 3 años.</strong>
+        Conseguirlo cuesta menos de $1M — por referido directo.
+      </p>
+      <p style="font-family:'DM Mono',monospace; font-size:0.65em; color:var(--dorado); opacity:0.5; margin-top:12px; letter-spacing:0.1em;">
+        MERCADO AGRITECH LATAM · USD 10.400M PARA 2033 · CRECIENDO 17% ANUAL
+      </p>
+
+      <aside class="notes">3:45 — Firme, rítmico. Cada cifra separada. Énfasis en la proporción.</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S20 · EL ALTA MÉDICA — 2030
+         4:05
+         📷 Reemplaza con foto de rosas / campo amanecer
+    ══════════════════════════════════════════ -->
+    <section
+      data-background-image="https://images.unsplash.com/photo-1462275646964-a0e3386b89fa?w=1920&q=80&fit=crop"
+      data-background-color="#0f2519"
+      data-background-opacity="0.18">
+      <div class="gold-bar"></div>
+      <p class="label">El alta médica · 2030</p>
+      <p style="font-family:'Cormorant Garamond',serif; font-size:2em; font-weight:500; line-height:1.6; white-space:nowrap; color:var(--crema);">
+        20 de enero. Dashboard abierto.<br/>
+        <span style="color:var(--dorado);">87.000 rosas — 94% de precisión.</span><br/>
+        Sin rezar.
+      </p>
+
+      <aside class="notes">4:05 — Tono cálido, esperanzador. "No tenga que rezar" — ese es el cierre emocional real.</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S21 · LLAMADO A LA ACCIÓN · CEIS FASE 2
+         4:25
+    ══════════════════════════════════════════ -->
+    <section data-background-color="#0f2519" style="padding:24px 72px 36px;">
+      <div class="gold-bar" style="margin-bottom:8px;"></div>
+      <p class="label" style="margin-bottom:8px;">Llamado a la acción</p>
+      <h2 style="font-size:1.35em; line-height:1.15; margin:0 0 14px; max-width:760px;">
+        El diagnóstico está hecho.<br/>
+        El tratamiento existe.<br/>
+        <span style="color:var(--dorado);">El piloto está corriendo.</span>
+      </h2>
+      <p style="font-family:'DM Sans',sans-serif; font-size:0.8em; color:var(--crema-dim); margin:0 0 14px; line-height:1.5; max-width:900px;">
+        Si el CEIS tiene una segunda fase para startups con pacientes reales y tratamiento en campo —
+      </p>
+      <h3 style="font-size:1.25em; color:var(--dorado); margin:0;">
+        quiero esa conversación.
+      </h3>
+
+      <aside class="notes">4:25 — Sin ansiedad, con certeza. Decirlo sin prisa. No llenar el silencio después.</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S22 · TAGLINE FINAL
+         4:40 — silencio
+    ══════════════════════════════════════════ -->
+    <section class="center-slide" data-background-color="#080e0a">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none" style="width:44px; margin-bottom:36px; opacity:0.9;">
+        <path d="M20 4C20 4 8 13.5 8 24C8 30.6 13.4 36 20 36C26.6 36 32 30.6 32 24C32 13.5 20 4 20 4Z" fill="#d4900a"/>
+        <path d="M20 11L20 36" stroke="#080e0a" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M20 20C20 20 15 16.5 12 19.5" stroke="#080e0a" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M20 27C20 27 25 23.5 28 26.5" stroke="#080e0a" stroke-width="2.2" stroke-linecap="round"/>
+      </svg>
+
+      <h1 style="font-size:2.4em; text-align:center; font-weight:500; margin:0 0 10px;">AgriVision.</h1>
+      <p style="font-family:'Cormorant Garamond',serif; font-size:1.7em; font-style:italic; text-align:center; color:var(--crema-dim); line-height:1.4; margin:0;">
+        Porque <em style="color:var(--dorado); font-style:normal;">"más o menos"</em><br/>no es un diagnóstico.
+      </p>
+
+      <aside class="notes">4:40 — Decirlo sin prisa. Dejar que resuene. SILENCIO. No llenar. — — — Pausa. Luego la transición a Parte 2.</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S23 · DIVISOR — PARTE 2
+         Bootcamps · 30 segundos
+    ══════════════════════════════════════════ -->
+    <section class="center-slide" data-background-color="#080e0a">
+      <p class="label c" style="margin-bottom:24px; letter-spacing:0.35em; font-size:0.6em;">PARTE 2</p>
+      <div style="width:40px; height:2px; background:var(--dorado); opacity:0.4; margin:0 auto 28px;"></div>
+      <h2 style="font-size:2.6em; text-align:center; line-height:1.2; font-weight:500;">Bootcamps</h2>
+      <p style="font-family:'DM Mono',monospace; font-size:0.58em; color:var(--dorado); opacity:0.4; text-align:center; margin-top:20px; letter-spacing:0.28em;">
+        30 SEGUNDOS · HITOS Y APRENDIZAJES
+      </p>
+
+      <aside class="notes">Divisor Parte 2 — Transición natural. "Los cuatro bootcamps fueron la residencia clínica que este emprendimiento necesitaba."</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S24 · BOOTCAMPS — HITOS DE FASE
+         30 segundos
+    ══════════════════════════════════════════ -->
+    <section data-background-color="#0f2519">
+      <div class="gold-bar"></div>
+      <p class="label">La residencia clínica · Hitos de fase</p>
+
+      <div class="hito-row">
+        <div class="hito-num">01</div>
+        <div class="hito-body">
+          <p class="hito-title">Cambié el modelo de negocio</p>
+          <p class="hito-sub">De venta de tecnología a suscripción de datos.</p>
+        </div>
+      </div>
+      <div class="hito-row">
+        <div class="hito-num">02</div>
+        <div class="hito-body">
+          <p class="hito-title">Construí las proyecciones financieras reales</p>
+          <p class="hito-sub">LTV, CAC, estructura de margen, modelo de ingresos.</p>
+        </div>
+      </div>
+      <div class="hito-row" style="border-bottom:none;">
+        <div class="hito-num">03</div>
+        <div class="hito-body">
+          <p class="hito-title">Refiné la propuesta de valor</p>
+          <p class="hito-sub">El cliente no compra software — <span style="color:var(--dorado);">compra certeza.</span></p>
+        </div>
+      </div>
+
+      <p style="font-family:'DM Mono',monospace; font-size:0.65em; color:var(--dorado); opacity:0.5; margin-top:28px; letter-spacing:0.14em;">
+        ESO CAMBIÓ EL PITCH · EL PRECIO · EL CANAL.
+      </p>
+
+      <aside class="notes">Bootcamps — Conciso, preciso. 3 hitos exactos. La frase clave al final: "compra certeza, no software." Memorizar — debe salir fluido en 30 segundos.</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S25 · DIVISOR — PARTE 3
+         Retos de Incubación · 1 minuto
+    ══════════════════════════════════════════ -->
+    <section class="center-slide" data-background-color="#080e0a">
+      <p class="label c" style="margin-bottom:24px; letter-spacing:0.35em; font-size:0.6em;">PARTE 3</p>
+      <div style="width:40px; height:2px; background:var(--dorado); opacity:0.4; margin:0 auto 28px;"></div>
+      <h2 style="font-size:2.6em; text-align:center; line-height:1.2; font-weight:500;">Retos de Incubación</h2>
+      <p style="font-family:'DM Mono',monospace; font-size:0.58em; color:var(--dorado); opacity:0.4; text-align:center; margin-top:20px; letter-spacing:0.28em;">
+        1 MINUTO · HOJA DE RUTA FASE 2
+      </p>
+
+      <aside class="notes">Divisor Parte 3 — "Para la segunda fase, los retos son concretos."</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S26 · RETOS EMPRESARIALES
+         ~40 segundos
+    ══════════════════════════════════════════ -->
+    <section data-background-color="#0f2519">
+      <div class="gold-bar"></div>
+      <p class="label">Retos empresariales · Desarrollo e innovación</p>
+
+      <div class="reto-row">
+        <div class="reto-arrow">→</div>
+        <div class="reto-text">Cerrar los primeros <strong style="color:var(--dorado);">tres clientes de pago</strong> antes del mes tres.</div>
+      </div>
+      <div class="reto-row">
+        <div class="reto-arrow">→</div>
+        <div class="reto-text">El co-founder ideal: el gerente de finca que <strong style="color:var(--dorado);">ya fue paciente</strong> — que conoce el diagnóstico en carne propia y puede abrir puertas que yo no puedo abrir solo.</div>
+      </div>
+      <div class="reto-row">
+        <div class="reto-arrow">→</div>
+        <div class="reto-text">Validar el canal: ¿venta directa al gerente o vía gremios como <strong>Asocolflores</strong>?</div>
+      </div>
+      <div class="reto-row" style="border-bottom:none;">
+        <div class="reto-arrow">→</div>
+        <div class="reto-text">Expandir el módulo de proyección a cultivos adicionales — más cultivos, misma plataforma.</div>
+      </div>
+
+      <aside class="notes">Retos empresariales — El co-founder es el reto más poderoso. Dale espacio: "Busco al gerente de finca que fue paciente y ahora quiere ser parte del tratamiento. El mejor co-founder posible es un cliente cercano que se convierte en socio."</aside>
+    </section>
+
+    <!-- ══════════════════════════════════════════
+         S27 · RETOS DE CARÁCTER EMPRENDEDOR
+         ~20 segundos + cierre
+    ══════════════════════════════════════════ -->
+    <section data-background-color="#0f2519">
+      <div class="gold-bar"></div>
+      <p class="label">Retos de carácter emprendedor</p>
+
+      <div class="reto-row">
+        <div class="reto-arrow">→</div>
+        <div class="reto-text">Aprender a <strong style="color:var(--dorado);">vender</strong> — no solo a demostrar.</div>
+      </div>
+      <div class="reto-row">
+        <div class="reto-arrow">→</div>
+        <div class="reto-text">Operar con foco en el cliente, no en la tecnología.</div>
+      </div>
+      <div class="reto-row" style="border-bottom:none;">
+        <div class="reto-arrow">→</div>
+        <div class="reto-text">Construir la narrativa financiera para una ronda de inversión ángel.</div>
+      </div>
+
+      <p style="font-family:'Cormorant Garamond',serif; font-size:1.05em; font-style:italic; color:var(--crema-dim); margin-top:24px; line-height:1.55;">
+        Cuando llegué al CEIS, tenía el tratamiento en el laboratorio.<br/>
+        Lo que no tenía era claridad sobre el consultorio —
+        <span style="color:var(--crema); font-style:normal;">y eso fue exactamente lo que construí aquí.</span>
+      </p>
+      <p style="font-family:'DM Sans',sans-serif; font-size:0.88em; color:var(--dorado); margin-top:14px; line-height:1.5;">
+        Hoy regreso con el primer paciente en tratamiento activo. Y pagando.
+      </p>
+      <p style="font-family:'DM Sans',sans-serif; font-size:0.82em; color:var(--crema-dim); margin-top:10px; line-height:1.6;">
+        Ahora el riesgo cambió. Ya no es "¿funciona el tratamiento?" —<br/>
+        es <strong style="color:var(--dorado);">"¿puedo escalar el consultorio antes de que llegue otro médico?"</strong>
+      </p>
+      <p style="font-family:'DM Mono',monospace; font-size:0.72em; color:var(--dorado); opacity:0.85; margin-top:18px; letter-spacing:0.06em; line-height:1.7;">
+        No pido capital.<br/>
+        Pido acompañamiento para convertir un primer contrato en diez — antes de que termine el año.
+      </p>
+
+      <aside class="notes">Cierre con convicción. Pausa antes de "Y pagando." — dejarlo resonar. La pregunta retórica del "otro médico" crea urgencia sin ansiedad. Terminar lento en "antes de que termine el año." Silencio. No llenar.</aside>
+    </section>
+
+  </div>
+</div>
+
+<!-- ── Scripts ───────────────────────────────────── -->
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+<script>
+  // ── Tiempos por slide en ms (0 = sin auto-avance) ──
+  // Estructura: 3:30 elevator pitch · 30 seg bootcamps · 1 min retos
+  const TIMINGS = [
+    0,      // S01 Portada              — arranque manual
+    20000,  // S02 El paciente          — 0:00 → 0:20
+    20000,  // S03 El síntoma           — 0:20 → 0:40
+    5000,   // S04 Diagnóstico inicial  — 0:40 → 0:45
+    10000,  // S05 Anamnesis            — 0:45 → 0:55
+    15000,  // S06 Timeline             — 0:55 → 1:10
+    10000,  // S07 El problema          — 1:10 → 1:20
+    15000,  // S08 Sí señor 1           — 1:20 → 1:35
+    15000,  // S09 Sí señor 2           — 1:35 → 1:50
+    10000,  // S10 Sí señor 3           — 1:50 → 2:00
+    5000,   // S11 Sí señor 4           — 2:00 → 2:05
+    10000,  // S12 Diagnóstico completo — 2:05 → 2:15
+    20000,  // S13 Tratamiento          — 2:15 → 2:35
+    15000,  // S14 Protocolo            — 2:35 → 2:50
+    10000,  // S15 Sin hardware         — 2:50 → 3:00
+    15000,  // S16 Tracción             — 3:00 → 3:15
+    20000,  // S17 Dream Team           — 3:15 → 3:35
+    10000,  // S18 Escalabilidad        — 3:35 → 3:45
+    20000,  // S19 Prescripción         — 3:45 → 4:05
+    20000,  // S20 Alta médica          — 4:05 → 4:25
+    15000,  // S21 CTA CEIS Fase 2      — 4:25 → 4:40
+    0,      // S22 Tagline              — pausa manual antes de Parte 2
+    3000,   // S23 Divisor Parte 2      — transición breve
+    30000,  // S24 Bootcamps hitos      — 30 seg
+    3000,   // S25 Divisor Parte 3      — transición breve
+    40000,  // S26 Retos empresariales  — ~40 seg
+    0,      // S27 Retos carácter       — cierre manual
+  ];
+
+  Reveal.initialize({
+    hash: true,
+    controls: false,
+    progress: false,
+    slideNumber: false,
+    overview: true,
+    center: false,
+    transition: 'fade',
+    transitionSpeed: 'slow',
+    backgroundTransition: 'fade',
+    width: 1280,
+    height: 720,
+    margin: 0,
+    autoSlide: 0,           // desactivado por defecto — activa con A
+    autoSlideStoppable: true,
+    plugins: []
+  });
+
+  Reveal.on('ready', () => {
+    document.querySelectorAll('.reveal .slides > section').forEach((s, i) => {
+      s.dataset.autoslide = TIMINGS[i] ?? 0;
+    });
+  });
+
+  // ── Barra de progreso por slide ────────────────────
+  const progressBar = document.getElementById('slide-progress');
+
+  function startProgress(ms) {
+    progressBar.style.transition = 'none';
+    progressBar.style.width = '100%';
+    progressBar.style.opacity = ms > 0 ? '0.45' : '0';
+    if (ms <= 0) return;
+    progressBar.getBoundingClientRect();
+    progressBar.style.transition = `width ${ms}ms linear`;
+    progressBar.style.width = '0%';
+  }
+
+  function stopProgress() {
+    progressBar.style.transition = 'opacity 0.3s';
+    progressBar.style.opacity = '0';
+  }
+
+  Reveal.on('slidechanged', e => {
+    if (autoOn) startProgress(TIMINGS[e.indexh] ?? 0);
+  });
+
+  // ── Estado de auto-slide ───────────────────────────
+  let autoOn = false;
+  const autoEl = document.getElementById('auto-indicator');
+
+  function toggleAuto() {
+    autoOn = !autoOn;
+    Reveal.configure({ autoSlide: autoOn ? 1 : 0 });
+    autoEl.style.opacity = autoOn ? '0.65' : '0';
+    if (autoOn) {
+      startProgress(TIMINGS[Reveal.getState().indexh] ?? 0);
+    } else {
+      stopProgress();
+    }
+  }
+
+  // ── Timer de pitch ─────────────────────────────────
+  const timerEl = document.getElementById('pitch-timer');
+  let timerStart = null, timerInterval = null;
+
+  function toggleTimer() {
+    if (!timerStart) {
+      timerStart = Date.now();
+      timerEl.style.display = 'block';
+      timerInterval = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - timerStart) / 1000);
+        const m = Math.floor(elapsed / 60);
+        const s = elapsed % 60;
+        timerEl.textContent = `${m}:${s.toString().padStart(2,'0')}`;
+        timerEl.style.color = elapsed > 300 ? '#c0392b' : '#d4900a';
+      }, 500);
+    } else {
+      clearInterval(timerInterval);
+      timerStart = null;
+      timerEl.style.display = 'none';
+    }
+  }
+
+  // ── Teclado ────────────────────────────────────────
+  // A → toggle auto-avance
+  // T → toggle cronómetro
+  document.addEventListener('keydown', e => {
+    if (e.key === 'a' || e.key === 'A') toggleAuto();
+    if (e.key === 't' || e.key === 'T') toggleTimer();
+  });
+</script>
+</body>
+</html>
