@@ -553,9 +553,11 @@ with st.expander(
 
             engine = _get_histo_engine()
 
-            # Seleccionamos sólo las columnas que usan los pasos 2 y 3.
-            # Ordenar DESC por orden (convertido a entero) garantiza traer
-            # los registros más recientes cuando la tabla tiene millones de filas.
+            # Ordenar por orden DESC garantiza traer las órdenes más recientes.
+            # lot_esc no es confiable como criterio de recencia: algunas órdenes
+            # nuevas tienen lot_esc bajo (~111k) mientras registros antiguos
+            # pueden tener lot_esc alto (~4M), haciendo que las nuevas queden
+            # fuera del límite si se ordena por lot_esc.
             query = f"""
                 SELECT orden, f_emi, no_entidad, ciudad1, courrier,
                        retorno, ret_esc, serial,
@@ -563,8 +565,8 @@ with st.expander(
                        n_servicio, planilla
                 FROM histo
                 ORDER BY
-                    (lot_esc + 0) DESC,
-                    (orden + 0) DESC
+                    (orden + 0) DESC,
+                    (lot_esc + 0) DESC
                 LIMIT {HISTO_LIMIT}
             """
 

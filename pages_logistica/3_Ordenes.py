@@ -212,25 +212,23 @@ with tab1:
                                     UPDATE ordenes
                                     SET cantidad_local              = %s,
                                         cantidad_nacional           = %s,
-                                        cantidad_total              = %s,
                                         cantidad_recibido_local     = %s,
                                         cantidad_recibido_nacional  = %s,
                                         valor_total                 = %s
                                     WHERE id = %s
-                                """, (c_local, c_nac, c_total, c_local, c_nac,
+                                """, (c_local, c_nac, c_local, c_nac,
                                       v_total, existente[0]))
                                 actualizados_ord += 1
                             else:
                                 cursor.execute("""
                                     INSERT INTO ordenes
                                         (numero_orden, cliente_id, fecha_recepcion, tipo_servicio,
-                                         cantidad_local, cantidad_nacional, cantidad_total,
+                                         cantidad_local, cantidad_nacional,
                                          cantidad_recibido_local, cantidad_recibido_nacional,
                                          valor_total, estado)
-                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'activa')
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'activa')
                                 """, (num_orden, id_cliente, fecha, tipo_ser,
-                                      c_local, c_nac, c_total,
-                                      c_local, c_nac, v_total))
+                                      c_local, c_nac, c_local, c_nac, v_total))
                                 exitos_ord += 1
 
                         except Exception as e_ord:
