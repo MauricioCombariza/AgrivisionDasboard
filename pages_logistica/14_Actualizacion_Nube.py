@@ -148,7 +148,7 @@ def _get_histo_engine():
 _VPS_SSH_HOST = "204.168.150.196"
 _VPS_SSH_KEY  = os.path.expanduser("~/.ssh/agrivision_vps")
 _TUNEL_CMD    = [
-    "ssh", "-L", f"{_LG_PORT}:localhost:3306",
+    "/usr/bin/ssh", "-L", f"{_LG_PORT}:localhost:3306",
     "-N", "-f",
     "-i", _VPS_SSH_KEY,
     "-o", "StrictHostKeyChecking=no",
