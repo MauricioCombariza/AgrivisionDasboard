@@ -1494,6 +1494,17 @@ with st.expander(
                         _cur_bw_p5.close()
                         _conn_bw_p5.close()
 
+                        # Overrides locales: couriers cuya planilla en histo está permanentemente
+                        # vacía → el usuario asignó manualmente una planilla real en la BD local.
+                        # Si la tabla aún no existe (página 13 nunca cargada), se usa dict vacío.
+                        try:
+                            cur_op.execute(
+                                "SELECT cod_men, planilla_asignada FROM courier_planilla_asignada"
+                            )
+                            _planilla_override = {str(r[0]): str(r[1]) for r in cur_op.fetchall()}
+                        except Exception:
+                            _planilla_override = {}
+
                         # Normalizar nombres de cliente con el mapeo ya cargado en BD
                         for _r in _histo_ext:
                             _r['no_entidad'] = mapeos_cli.get(
@@ -1554,7 +1565,15 @@ with st.expander(
 
                         # Insertar / actualizar desde histo
                         for _r in _histo_ext:
-                            _planilla = str(_r['planilla'])
+                            _planilla_raw = str(_r['planilla'])
+                            # Si histo devuelve SIN NUMERO y existe un override local, usar la
+                            # planilla asignada manualmente para que el sync actualice el registro
+                            # correcto en lugar de crear un duplicado con 'SIN NUMERO'.
+                            _planilla = (
+                                _planilla_override.get(str(_r['cod_men']), _planilla_raw)
+                                if _planilla_raw == 'SIN NUMERO'
+                                else _planilla_raw
+                            )
                             if _planilla in planillas_revisadas:
                                 continue
                             _cod  = str(_r['cod_men'])

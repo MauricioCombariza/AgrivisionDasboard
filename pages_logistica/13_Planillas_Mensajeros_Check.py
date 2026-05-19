@@ -93,6 +93,22 @@ try:
     except Exception:
         conn.rollback()
 
+    # Mapeo persistente: cod_men con planilla vacía en histo → planilla asignada localmente
+    try:
+        _cur_cpa = conn.cursor()
+        _cur_cpa.execute("""
+            CREATE TABLE IF NOT EXISTS courier_planilla_asignada (
+                cod_men           VARCHAR(20)  NOT NULL,
+                planilla_asignada VARCHAR(100) NOT NULL,
+                fecha_asignacion  DATE         NOT NULL,
+                PRIMARY KEY (cod_men)
+            )
+        """)
+        conn.commit()
+        _cur_cpa.close()
+    except Exception:
+        conn.rollback()
+
     # Cargar planillas revisadas en memoria para esta ejecución
     cursor.execute("SELECT lot_esc FROM planillas_revisadas")
     planillas_revisadas_set = {r['lot_esc'] for r in cursor.fetchall()}
@@ -1179,6 +1195,136 @@ try:
                     st.info("Todos ya protegidos")
         except Exception as e:
             st.error(f"Error: {e}")
+
+    # =====================================================
+    # ASIGNAR PLANILLA A COURIER SIN NÚMERO EN HISTO
+    # =====================================================
+    with st.expander("📋 Asignar Planilla a Courier sin Número en histo", expanded=False):
+        st.caption(
+            "Para couriers cuyas órdenes en bases_web.histo tienen planilla vacía de forma permanente. "
+            "Asigna un número de planilla local y protege el registro para que el sync no lo sobreescriba."
+        )
+
+        cursor.execute("""
+            SELECT codigo, nombre_completo
+            FROM personal
+            WHERE activo = TRUE AND tipo_personal = 'courier_externo'
+            ORDER BY codigo
+        """)
+        _couriers_ext = cursor.fetchall()
+
+        if not _couriers_ext:
+            st.info("No hay couriers externos activos configurados.")
+        else:
+            _opciones_ce = {f"{c['codigo']} — {c['nombre_completo']}": c['codigo'] for c in _couriers_ext}
+            _sel_ce = st.selectbox("Courier externo", list(_opciones_ce.keys()), key="sel_asignar_planilla_courier")
+            _cod_ce = _opciones_ce[_sel_ce]
+
+            cursor.execute(
+                "SELECT planilla_asignada, fecha_asignacion FROM courier_planilla_asignada WHERE cod_men = %s",
+                (_cod_ce,)
+            )
+            _override_actual = cursor.fetchone()
+            if _override_actual:
+                st.info(
+                    f"Asignación actual: planilla **{_override_actual['planilla_asignada']}** "
+                    f"(registrada el {_override_actual['fecha_asignacion']})"
+                )
+
+            col_diag_sp1, col_diag_sp2 = st.columns(2)
+            with col_diag_sp1:
+                if st.button("🔍 Diagnóstico en histo", key="btn_diag_sin_planilla"):
+                    _conn_diag_sp = _conectar_bases_web()
+                    if not _conn_diag_sp:
+                        st.error("No se pudo conectar a bases_web")
+                    else:
+                        try:
+                            _cur_diag_sp = _conn_diag_sp.cursor(dictionary=True)
+                            _cur_diag_sp.execute("""
+                                SELECT COUNT(DISTINCT serial) AS seriales,
+                                       MIN(f_emi) AS desde,
+                                       MAX(f_emi) AS hasta
+                                FROM histo
+                                WHERE cod_men = %s
+                                  AND TRIM(COALESCE(planilla, '')) = ''
+                            """, (_cod_ce,))
+                            _diag_sp = _cur_diag_sp.fetchone()
+                            _cur_diag_sp.close()
+                            _conn_diag_sp.close()
+                            if _diag_sp and _diag_sp['seriales']:
+                                st.success(
+                                    f"**{_diag_sp['seriales']:,} seriales** sin planilla en histo | "
+                                    f"Rango: {_diag_sp['desde']} → {_diag_sp['hasta']}"
+                                )
+                            else:
+                                st.info("Este courier no tiene registros con planilla vacía en histo.")
+                        except Exception as _e_diag_sp:
+                            st.error(f"Error diagnóstico: {_e_diag_sp}")
+
+            with col_diag_sp2:
+                cursor.execute(
+                    "SELECT COUNT(*) AS total FROM gestiones_mensajero "
+                    "WHERE cod_mensajero = %s AND lot_esc = 'SIN NUMERO'",
+                    (_cod_ce,)
+                )
+                _sin_num_local = cursor.fetchone()
+                if _sin_num_local and _sin_num_local['total']:
+                    st.warning(
+                        f"**{_sin_num_local['total']} registro(s)** con lot_esc='SIN NUMERO' "
+                        "en gestiones_mensajero local"
+                    )
+                else:
+                    st.info("No hay registros 'SIN NUMERO' locales para este courier.")
+
+            st.markdown("---")
+            _nueva_planilla_sp = st.text_input(
+                "Número de planilla a asignar",
+                placeholder="ej. 12345",
+                key="input_nueva_planilla_sp"
+            )
+
+            if st.button("✅ Asignar Planilla", type="primary", key="btn_asignar_planilla_sp"):
+                if not _nueva_planilla_sp.strip():
+                    st.error("Ingresa un número de planilla válido.")
+                else:
+                    _planilla_sp = _nueva_planilla_sp.strip()
+                    try:
+                        _cur_sp = conn.cursor()
+
+                        # Guardar mapeo cod_men → planilla real
+                        _cur_sp.execute("""
+                            INSERT INTO courier_planilla_asignada
+                                (cod_men, planilla_asignada, fecha_asignacion)
+                            VALUES (%s, %s, CURDATE())
+                            ON DUPLICATE KEY UPDATE
+                                planilla_asignada = VALUES(planilla_asignada),
+                                fecha_asignacion  = CURDATE()
+                        """, (_cod_ce, _planilla_sp))
+
+                        # Renombrar registros SIN NUMERO → planilla real y poner candado
+                        _cur_sp.execute("""
+                            UPDATE gestiones_mensajero
+                            SET lot_esc = %s, editado_manualmente = 1
+                            WHERE cod_mensajero = %s AND lot_esc = 'SIN NUMERO'
+                        """, (_planilla_sp, _cod_ce))
+                        _renombrados = _cur_sp.rowcount
+
+                        # Proteger la planilla del sync futuro
+                        _cur_sp.execute("""
+                            INSERT IGNORE INTO planillas_revisadas (lot_esc, fecha_revision)
+                            VALUES (%s, CURDATE())
+                        """, (_planilla_sp,))
+
+                        conn.commit()
+                        _cur_sp.close()
+                        st.success(
+                            f"✅ Planilla **{_planilla_sp}** asignada a courier {_cod_ce}: "
+                            f"{_renombrados} registro(s) actualizados y protegidos contra el sync."
+                        )
+                        st.rerun()
+                    except Exception as _e_sp:
+                        conn.rollback()
+                        st.error(f"Error al asignar planilla: {_e_sp}")
 
     st.divider()
 
