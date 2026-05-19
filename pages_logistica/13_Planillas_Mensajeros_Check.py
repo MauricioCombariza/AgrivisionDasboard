@@ -262,13 +262,16 @@ try:
             _seriales_histo_hdr = None
             _valor_histo_hdr    = None
             if es_courier_externo_busq:
-                # Couriers que tienen planilla vacía en histo pero están mapeados a este
-                # número en courier_planilla_asignada (sus seriales también pertenecen aquí).
+                # Los cod_men courier_externo que ya tienen órdenes en gestiones_mensajero
+                # para esta planilla son la fuente de verdad: sus órdenes con planilla vacía
+                # en histo también pertenecen aquí (asignadas manualmente con candado).
                 _cur_ov_hdr = conn.cursor(dictionary=True)
-                _cur_ov_hdr.execute(
-                    "SELECT cod_men FROM courier_planilla_asignada WHERE planilla_asignada = %s",
-                    (str(num_planilla),)
-                )
+                _cur_ov_hdr.execute("""
+                    SELECT DISTINCT gm.cod_mensajero AS cod_men
+                    FROM gestiones_mensajero gm
+                    JOIN personal p ON gm.cod_mensajero = p.codigo
+                    WHERE gm.lot_esc = %s AND p.tipo_personal = 'courier_externo'
+                """, (str(num_planilla),))
                 _override_cod_men_hdr = [r['cod_men'] for r in _cur_ov_hdr.fetchall()]
                 _cur_ov_hdr.close()
 
@@ -733,14 +736,15 @@ try:
                     try:
                         cur_bw = conn_bw.cursor(dictionary=True)
 
-                        # Incluir seriales con planilla vacía en histo que pertenecen
-                        # a esta planilla por courier_planilla_asignada (mismo override
-                        # que el header, acotado a las órdenes ya registradas).
+                        # Mismo approach que el header: buscar los courier_externo que
+                        # ya tienen registros en gestiones para esta planilla.
                         _cur_ov_city = conn.cursor(dictionary=True)
-                        _cur_ov_city.execute(
-                            "SELECT cod_men FROM courier_planilla_asignada WHERE planilla_asignada = %s",
-                            (lot_esc_planilla,)
-                        )
+                        _cur_ov_city.execute("""
+                            SELECT DISTINCT gm.cod_mensajero AS cod_men
+                            FROM gestiones_mensajero gm
+                            JOIN personal p ON gm.cod_mensajero = p.codigo
+                            WHERE gm.lot_esc = %s AND p.tipo_personal = 'courier_externo'
+                        """, (lot_esc_planilla,))
                         _override_cod_city = [r['cod_men'] for r in _cur_ov_city.fetchall()]
                         _cur_ov_city.close()
 
