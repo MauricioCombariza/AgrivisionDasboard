@@ -239,6 +239,13 @@ try:
             precio_local_busq    = _precio_local_personal
             precio_nacional_busq = _precio_nac_personal
 
+            # Clave de los widgets de tarifa — se define aquí para poder leer
+            # st.session_state antes de que los widgets se rendericen.
+            _cod_men_key = (
+                f"{df_busq['cod_mensajero'].iloc[0]}"
+                f"_{int(_precio_local_personal)}_{int(_precio_nac_personal)}"
+            ) if not df_busq.empty else "x"
+
             # Si personal no tiene tarifa configurada, usar valor_unitario promedio
             # de gestiones_mensajero como referencia visual solamente.
             if precio_local_busq == 0 and es_courier_externo_busq and not df_busq.empty:
@@ -316,9 +323,17 @@ try:
                         _ciudad_rows_hdr = _cur_hdr.fetchall()
                         _cur_hdr.close()
                         _conn_bw_hdr.close()
-                        if _ciudad_rows_hdr and precio_local_busq > 0 and precio_nacional_busq > 0:
+                        # Leer tarifa desde session_state si el usuario ya la ingresó
+                        # en los widgets de abajo (disponible en cada re-render).
+                        _p_local_hdr = float(
+                            st.session_state.get(f"tar_local_busq_{_cod_men_key}", precio_local_busq) or 0
+                        )
+                        _p_nac_hdr = float(
+                            st.session_state.get(f"tar_nac_busq_{_cod_men_key}", precio_nacional_busq) or 0
+                        )
+                        if _ciudad_rows_hdr and _p_local_hdr > 0:
                             _valor_histo_hdr = sum(
-                                r['cnt'] * (precio_local_busq if r['tipo'] == 'local' else precio_nacional_busq)
+                                r['cnt'] * (_p_local_hdr if r['tipo'] == 'local' else _p_nac_hdr)
                                 for r in _ciudad_rows_hdr
                             )
                     except Exception:
@@ -717,16 +732,48 @@ try:
                 if conn_bw:
                     try:
                         cur_bw = conn_bw.cursor(dictionary=True)
-                        # Sin filtro cod_men para no perder seriales reasignados en gestiones
-                        cur_bw.execute("""
+
+                        # Incluir seriales con planilla vacía en histo que pertenecen
+                        # a esta planilla por courier_planilla_asignada (mismo override
+                        # que el header, acotado a las órdenes ya registradas).
+                        _cur_ov_city = conn.cursor(dictionary=True)
+                        _cur_ov_city.execute(
+                            "SELECT cod_men FROM courier_planilla_asignada WHERE planilla_asignada = %s",
+                            (lot_esc_planilla,)
+                        )
+                        _override_cod_city = [r['cod_men'] for r in _cur_ov_city.fetchall()]
+                        _cur_ov_city.close()
+
+                        _city_extra_sql = ""
+                        _city_params    = [lot_esc_planilla, lot_esc_planilla]
+                        if _override_cod_city:
+                            _ph_ov_c = ','.join(['%s'] * len(_override_cod_city))
+                            _cur_ov_ord_c = conn.cursor(dictionary=True)
+                            _cur_ov_ord_c.execute(
+                                f"SELECT DISTINCT orden FROM gestiones_mensajero "
+                                f"WHERE lot_esc = %s AND cod_mensajero IN ({_ph_ov_c}) AND orden IS NOT NULL",
+                                [lot_esc_planilla] + _override_cod_city
+                            )
+                            _override_ord_c = [str(r['orden']) for r in _cur_ov_ord_c.fetchall()]
+                            _cur_ov_ord_c.close()
+                            if _override_ord_c:
+                                _ph_or_c = ','.join(['%s'] * len(_override_ord_c))
+                                _city_extra_sql = (
+                                    f" OR (TRIM(cod_men) IN ({_ph_ov_c})"
+                                    f" AND TRIM(COALESCE(planilla,'')) = ''"
+                                    f" AND CAST(orden AS UNSIGNED) IN ({_ph_or_c}))"
+                                )
+                                _city_params += _override_cod_city + _override_ord_c
+
+                        cur_bw.execute(f"""
                             SELECT
                                 COALESCE(NULLIF(TRIM(ciudad1), ''), 'Sin ciudad') AS ciudad,
                                 COUNT(*) AS seriales
                             FROM histo
-                            WHERE (planilla = %s OR lot_esc = %s)
+                            WHERE (planilla = %s OR lot_esc = %s){_city_extra_sql}
                             GROUP BY ciudad
                             ORDER BY seriales DESC
-                        """, [lot_esc_planilla, lot_esc_planilla])
+                        """, _city_params)
                         rows_bw = cur_bw.fetchall()
                         cur_bw.close()
                         conn_bw.close()
