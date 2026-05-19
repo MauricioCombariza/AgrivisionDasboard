@@ -255,23 +255,54 @@ try:
             _seriales_histo_hdr = None
             _valor_histo_hdr    = None
             if es_courier_externo_busq:
-                # Usado por la sección de ciudades más abajo; refleja gestiones actuales.
-                _cod_men_list = [str(c) for c in df_busq['cod_mensajero'].unique()]
+                # Couriers que tienen planilla vacía en histo pero están mapeados a este
+                # número en courier_planilla_asignada (sus seriales también pertenecen aquí).
+                _cur_ov_hdr = conn.cursor(dictionary=True)
+                _cur_ov_hdr.execute(
+                    "SELECT cod_men FROM courier_planilla_asignada WHERE planilla_asignada = %s",
+                    (str(num_planilla),)
+                )
+                _override_cod_men_hdr = [r['cod_men'] for r in _cur_ov_hdr.fetchall()]
+                _cur_ov_hdr.close()
+
                 _conn_bw_hdr = _conectar_bases_web()
                 if _conn_bw_hdr:
                     try:
                         _cur_hdr = _conn_bw_hdr.cursor(dictionary=True)
-                        # Sin filtro cod_men: la planilla sola identifica todos los
-                        # seriales en histo, independientemente de reasignaciones en gestiones.
-                        _cur_hdr.execute("""
+
+                        # Construir cláusula extra para couriers con planilla vacía en histo.
+                        # Solo se incluyen las órdenes ya registradas en gestiones_mensajero
+                        # para esta planilla, evitando capturar órdenes de otros períodos.
+                        _hdr_base_params = [num_planilla, num_planilla]
+                        _hdr_extra_sql   = ""
+                        if _override_cod_men_hdr:
+                            _ph_ov = ','.join(['%s'] * len(_override_cod_men_hdr))
+                            _cur_ov_ord = conn.cursor(dictionary=True)
+                            _cur_ov_ord.execute(
+                                f"SELECT DISTINCT orden FROM gestiones_mensajero "
+                                f"WHERE lot_esc = %s AND cod_mensajero IN ({_ph_ov}) AND orden IS NOT NULL",
+                                [num_planilla] + _override_cod_men_hdr
+                            )
+                            _override_orders = [str(r['orden']) for r in _cur_ov_ord.fetchall()]
+                            _cur_ov_ord.close()
+                            if _override_orders:
+                                _ph_or = ','.join(['%s'] * len(_override_orders))
+                                _hdr_extra_sql = (
+                                    f" OR (TRIM(cod_men) IN ({_ph_ov})"
+                                    f" AND TRIM(COALESCE(planilla,'')) = ''"
+                                    f" AND CAST(orden AS UNSIGNED) IN ({_ph_or}))"
+                                )
+                                _hdr_base_params += _override_cod_men_hdr + _override_orders
+
+                        _cur_hdr.execute(f"""
                             SELECT COUNT(*) AS cnt FROM histo
-                            WHERE (planilla = %s OR lot_esc = %s)
-                        """, [num_planilla, num_planilla])
+                            WHERE (planilla = %s OR lot_esc = %s){_hdr_extra_sql}
+                        """, _hdr_base_params)
                         _r = _cur_hdr.fetchone()
                         _seriales_histo_hdr = int(_r['cnt']) if _r else None
 
                         # Valor usando clasificaciones guardadas en ciudad_tipo
-                        _cur_hdr.execute("""
+                        _cur_hdr.execute(f"""
                             SELECT
                                 COALESCE(NULLIF(TRIM(h.ciudad1),''),'Sin ciudad') AS ciudad,
                                 COUNT(*) AS cnt,
@@ -279,9 +310,9 @@ try:
                             FROM histo h
                             LEFT JOIN ciudad_tipo ct
                               ON TRIM(h.ciudad1) = ct.ciudad
-                            WHERE (h.planilla = %s OR h.lot_esc = %s)
+                            WHERE (h.planilla = %s OR h.lot_esc = %s){_hdr_extra_sql}
                             GROUP BY ciudad, tipo
-                        """, [num_planilla, num_planilla])
+                        """, _hdr_base_params)
                         _ciudad_rows_hdr = _cur_hdr.fetchall()
                         _cur_hdr.close()
                         _conn_bw_hdr.close()
