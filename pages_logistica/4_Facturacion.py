@@ -3208,6 +3208,82 @@ if _seccion == "🏙️ Facturación Ciudades":
                                     conn.rollback()
                                     st.error(f"Error: {_e}")
 
+                    st.divider()
+                    _edit_key = f'fc_editing_{_fac["id"]}'
+                    if not st.session_state.get(_edit_key):
+                        if st.button("✏️ Editar factura", key=f'fc_edit_btn_{_fac["id"]}'):
+                            st.session_state[_edit_key] = True
+                            st.rerun()
+                    else:
+                        st.markdown("**✏️ Editar factura**")
+                        with st.form(f'fc_edit_form_{_fac["id"]}'):
+                            _ef1, _ef2 = st.columns(2)
+                            with _ef1:
+                                _e_num = st.text_input(
+                                    "Número factura", value=_fac['numero_factura']
+                                )
+                                _e_femi = st.date_input(
+                                    "Fecha emisión",
+                                    value=_fac['fecha_emision'] or date.today()
+                                )
+                                _e_fvcto = st.date_input(
+                                    "Fecha vencimiento",
+                                    value=_fac['fecha_vencimiento']
+                                )
+                            with _ef2:
+                                _e_val = st.number_input(
+                                    "Valor total",
+                                    value=float(_fac['valor_total']),
+                                    step=10000.0, format="%.0f"
+                                )
+                                _estados_cxp = ['pendiente', 'vencida', 'pagada']
+                                _e_est = st.selectbox(
+                                    "Estado", _estados_cxp,
+                                    index=_estados_cxp.index(_fac['estado'])
+                                    if _fac['estado'] in _estados_cxp else 0
+                                )
+                                _e_fpago = st.date_input(
+                                    "Fecha de pago",
+                                    value=_fac['fecha_pago'] if _fac['fecha_pago'] else date.today()
+                                )
+                            _e_notas = st.text_input("Notas", value=_fac['notas'] or '')
+                            _esub, _ecan = st.columns(2)
+                            with _esub:
+                                _e_submit = st.form_submit_button(
+                                    "💾 Guardar cambios", type="primary", use_container_width=True
+                                )
+                            with _ecan:
+                                _e_cancel = st.form_submit_button(
+                                    "❌ Cancelar", use_container_width=True
+                                )
+
+                            if _e_submit:
+                                try:
+                                    _c = conn.cursor()
+                                    _fpago_val = _e_fpago if _e_est == 'pagada' else None
+                                    _c.execute("""
+                                        UPDATE facturas_courier_cxp
+                                        SET numero_factura=%s, fecha_emision=%s,
+                                            fecha_vencimiento=%s, valor_total=%s,
+                                            estado=%s, fecha_pago=%s, notas=%s
+                                        WHERE id=%s
+                                    """, (
+                                        _e_num.strip(), _e_femi, _e_fvcto,
+                                        _e_val, _e_est, _fpago_val,
+                                        _e_notas or None, _fac['id']
+                                    ))
+                                    conn.commit()
+                                    _c.close()
+                                    st.success("✅ Factura actualizada correctamente")
+                                    st.session_state.pop(_edit_key, None)
+                                    st.rerun()
+                                except Exception as _e:
+                                    conn.rollback()
+                                    st.error(f"Error al actualizar: {_e}")
+                            if _e_cancel:
+                                st.session_state.pop(_edit_key, None)
+                                st.rerun()
+
 
 if 'cursor' in locals():
     cursor.close()

@@ -6,10 +6,604 @@ import sys
 import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from utils.db_connection import conectar_logistica
+from utils.db_connection import get_cached_connection
 
 
-# CSS personalizado para mejorar la apariencia
+MESES_LISTA = ["Todos", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+               "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+
+MESES_NOMBRES = {
+    1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr", 5: "May", 6: "Jun",
+    7: "Jul", 8: "Ago", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic"
+}
+
+CATEGORIAS_NOMBRES = {
+    'mantenimiento': 'Mantenimiento', 'polizas': 'Pólizas',
+    'servicios_publicos': 'Serv. Públicos', 'caja_menor': 'Caja Menor',
+    'papeleria': 'Papelería', 'aseo': 'Aseo', 'internet': 'Internet',
+    'software': 'Software', 'alquiler_equipos': 'Alq. Equipos',
+    'arriendo': 'Arriendo', 'honorarios': 'Honorarios',
+    'impuestos': 'Impuestos', 'otros': 'Otros'
+}
+
+
+# ── Funciones de datos con caché ─────────────────────────────────────────────
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _q_tab1(anio: int, mes_num) -> dict:
+    conn = get_cached_connection("logistica")
+    cursor = conn.cursor(dictionary=True)
+    try:
+        mf_esc = "AND MONTH(gm.fecha_escaner) = %s" if mes_num else ""
+        mf_fac = "AND MONTH(ft.fecha_factura) = %s" if mes_num else ""
+        mf_fec = "AND MONTH(fecha) = %s" if mes_num else ""
+        mf_nom = "AND periodo_mes = %s" if mes_num else ""
+        mf_rec = "AND MONTH(o.fecha_recepcion) = %s" if mes_num else ""
+        p = [anio, mes_num] if mes_num else [anio]
+
+        # 1. Costos mensajeros — usa gm.cliente directamente (sin TRIM/REPLACE JOIN)
+        # NOTA: gm.cliente es campo denormalizado. Si un nombre difiere de clientes.nombre_empresa
+        # el SUM no coincidirá. Auditar con:
+        #   SELECT DISTINCT UPPER(TRIM(gm.cliente)) FROM gestiones_mensajero
+        #   WHERE UPPER(TRIM(gm.cliente)) NOT IN (SELECT UPPER(TRIM(nombre_empresa)) FROM clientes)
+        cursor.execute(f"""
+            SELECT UPPER(TRIM(gm.cliente)) as cliente,
+                   SUM(gm.valor_total) as costo_mensajeros
+            FROM gestiones_mensajero gm
+            WHERE YEAR(gm.fecha_escaner) = %s {mf_esc}
+            GROUP BY UPPER(TRIM(gm.cliente))
+        """, p)
+        costos_mensajeros = {r['cliente']: float(r['costo_mensajeros'] or 0) for r in cursor.fetchall()}
+
+        # 2. Costos de transporte por cliente
+        cursor.execute(f"""
+            SELECT UPPER(TRIM(c.nombre_empresa)) as cliente,
+                   SUM(dft.costo_asignado) as costo_transporte
+            FROM detalle_facturas_transporte dft
+            JOIN facturas_transporte ft ON dft.factura_id = ft.id
+            JOIN ordenes o ON dft.orden_id = o.id
+            JOIN clientes c ON o.cliente_id = c.id
+            WHERE YEAR(ft.fecha_factura) = %s {mf_fac} AND ft.estado != 'anulada'
+            GROUP BY UPPER(TRIM(c.nombre_empresa))
+        """, p)
+        costos_transporte = {r['cliente']: float(r['costo_transporte'] or 0) for r in cursor.fetchall()}
+
+        # 3. Gastos administrativos total
+        cursor.execute(
+            f"SELECT SUM(monto) as t FROM gastos_administrativos WHERE YEAR(fecha) = %s {mf_fec}", p
+        )
+        r = cursor.fetchone()
+        total_gastos_admin = float((r or {}).get('t') or 0)
+
+        # 4. Gastos administrativos por categoría
+        cursor.execute(f"""
+            SELECT categoria, SUM(monto) as total
+            FROM gastos_administrativos WHERE YEAR(fecha) = %s {mf_fec}
+            GROUP BY categoria ORDER BY total DESC
+        """, p)
+        gastos_por_categoria = {r['categoria']: float(r['total'] or 0) for r in cursor.fetchall()}
+
+        # 4.5. Nómina
+        cursor.execute(f"""
+            SELECT SUM(costo_total_empleado) as total_nomina,
+                   SUM(salario_base + auxilio_transporte + auxilio_no_salarial) as total_salarios,
+                   SUM(total_seguridad_social) as total_ss,
+                   SUM(total_provisiones) as total_prov
+            FROM nomina_provisiones WHERE periodo_anio = %s {mf_nom}
+        """, p)
+        nomina = cursor.fetchone() or {}
+
+        # 4.6. Alistamiento (UNION 3 tablas)
+        if mes_num:
+            mf5 = "AND MONTH(fecha) = %s"
+            p5 = [anio, mes_num, anio, mes_num, anio, mes_num]
+        else:
+            mf5 = ""
+            p5 = [anio, anio, anio]
+        cursor.execute(f"""
+            SELECT SUM(total) as t FROM (
+                SELECT total FROM registro_horas WHERE YEAR(fecha) = %s {mf5}
+                UNION ALL
+                SELECT total FROM registro_labores WHERE YEAR(fecha) = %s {mf5}
+                UNION ALL
+                SELECT total FROM subsidio_transporte WHERE YEAR(fecha) = %s {mf5}
+            ) t
+        """, p5)
+        r = cursor.fetchone()
+        total_alistamiento = float((r or {}).get('t') or 0)
+
+        # 5. Entregas/devoluciones por cliente — usa gm.cliente directamente
+        cursor.execute(f"""
+            SELECT UPPER(TRIM(gm.cliente)) as cliente,
+                SUM(CASE WHEN gm.tipo_gestion LIKE '%%Entrega%%' THEN gm.total_seriales ELSE 0 END) as entregados,
+                SUM(CASE WHEN gm.tipo_gestion NOT LIKE '%%Entrega%%' THEN gm.total_seriales ELSE 0 END) as devoluciones
+            FROM gestiones_mensajero gm
+            WHERE YEAR(gm.fecha_escaner) = %s {mf_esc}
+            GROUP BY UPPER(TRIM(gm.cliente))
+        """, p)
+        gestiones_cliente = {
+            r['cliente']: {'entregados': int(r['entregados'] or 0), 'devoluciones': int(r['devoluciones'] or 0)}
+            for r in cursor.fetchall()
+        }
+
+        # 6. Query principal de órdenes
+        cursor.execute(f"""
+            SELECT c.nombre_empresa as cliente,
+                   COUNT(DISTINCT o.id) as total_ordenes,
+                   SUM(o.cantidad_total) as total_items,
+                   SUM(o.valor_total) as ingresos,
+                   0 as costos_operativos,
+                   SUM(o.valor_total) as utilidad_base
+            FROM clientes c LEFT JOIN ordenes o ON c.id = o.cliente_id
+            WHERE YEAR(o.fecha_recepcion) = %s {mf_rec}
+            GROUP BY c.id, c.nombre_empresa HAVING COUNT(DISTINCT o.id) > 0
+            ORDER BY utilidad_base DESC
+        """, p)
+        resultados = cursor.fetchall()
+
+        # 7. Detalle de órdenes por cliente
+        cursor.execute(f"""
+            SELECT UPPER(TRIM(c.nombre_empresa)) as cliente, o.numero_orden,
+                   o.cantidad_total as items_totales,
+                   COALESCE(o.cantidad_entregados_local, 0) + COALESCE(o.cantidad_entregados_nacional, 0) as entregas,
+                   COALESCE(o.cantidad_devolucion_local, 0) + COALESCE(o.cantidad_devolucion_nacional, 0) as devoluciones,
+                   o.fecha_recepcion, o.estado
+            FROM ordenes o JOIN clientes c ON o.cliente_id = c.id
+            WHERE YEAR(o.fecha_recepcion) = %s {mf_rec} ORDER BY o.fecha_recepcion DESC
+        """, p)
+        ordenes_detalle = cursor.fetchall()
+
+        return dict(
+            costos_mensajeros=costos_mensajeros,
+            costos_transporte=costos_transporte,
+            total_gastos_admin=total_gastos_admin,
+            gastos_por_categoria=gastos_por_categoria,
+            nomina=nomina,
+            total_alistamiento=total_alistamiento,
+            gestiones_cliente=gestiones_cliente,
+            resultados=resultados,
+            ordenes_detalle=ordenes_detalle,
+        )
+    finally:
+        cursor.close()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _q_debug_imile() -> dict:
+    conn = get_cached_connection("logistica")
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("""
+            SELECT pc.tipo_servicio, pc.ambito, pc.tipo_operacion,
+                   pc.precio_unitario, pc.costo_mensajero_entrega, pc.costo_mensajero_devolucion
+            FROM precios_cliente pc
+            JOIN clientes c ON pc.cliente_id = c.id
+            WHERE UPPER(c.nombre_empresa) LIKE '%IMILE%' AND pc.activo = TRUE
+        """)
+        precios = cursor.fetchall()
+
+        cursor.execute("""
+            SELECT o.numero_orden, o.cantidad_total, o.valor_total,
+                   o.cantidad_local, o.cantidad_nacional
+            FROM ordenes o
+            JOIN clientes c ON o.cliente_id = c.id
+            WHERE UPPER(c.nombre_empresa) LIKE '%IMILE%' AND o.estado = 'activa'
+            ORDER BY o.fecha_recepcion DESC LIMIT 10
+        """)
+        ordenes = cursor.fetchall()
+        for o in ordenes:
+            qty = o.get('cantidad_total')
+            val = o.get('valor_total')
+            o['valor_por_item'] = float(val or 0) / float(qty) if qty and float(qty) > 0 else 0
+
+        cursor.execute("""
+            SELECT COUNT(*) as total_gestiones,
+                   SUM(total_seriales) as total_seriales,
+                   SUM(valor_total) as costo_total_mensajeros,
+                   AVG(valor_unitario) as valor_unitario_promedio
+            FROM gestiones_mensajero
+            WHERE UPPER(cliente) LIKE '%IMILE%'
+            AND YEAR(fecha_registro) = YEAR(CURRENT_DATE)
+            AND MONTH(fecha_registro) = MONTH(CURRENT_DATE)
+        """)
+        gestiones = cursor.fetchone()
+        return dict(precios=precios, ordenes=ordenes, gestiones=gestiones)
+    finally:
+        cursor.close()
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _q_clientes_activos_con_ordenes() -> list:
+    conn = get_cached_connection("logistica")
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("""
+            SELECT DISTINCT c.id, c.nombre_empresa
+            FROM clientes c
+            JOIN ordenes o ON c.id = o.cliente_id
+            WHERE o.estado = 'activa'
+            ORDER BY c.nombre_empresa
+        """)
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _q_tab2_ordenes(fecha_desde, fecha_hasta, cliente_id) -> list:
+    conn = get_cached_connection("logistica")
+    cursor = conn.cursor(dictionary=True)
+    try:
+        query = """
+            SELECT o.numero_orden, c.nombre_empresa as cliente, cd.nombre as ciudad,
+                   o.cantidad_total, o.estado, o.fecha_recepcion,
+                   COALESCE(o.cantidad_entregados_local, 0) + COALESCE(o.cantidad_entregados_nacional, 0) as entregas_bd,
+                   COALESCE(o.cantidad_devolucion_local, 0) + COALESCE(o.cantidad_devolucion_nacional, 0) as devoluciones_bd,
+                   COALESCE(o.cantidad_en_lleva, 0) as en_lleva_bd
+            FROM ordenes o
+            JOIN clientes c ON o.cliente_id = c.id
+            LEFT JOIN ciudades cd ON o.ciudad_destino_id = cd.id
+            WHERE o.estado = 'activa' AND o.fecha_recepcion BETWEEN %s AND %s
+        """
+        params = [fecha_desde, fecha_hasta]
+        if cliente_id:
+            query += " AND o.cliente_id = %s"
+            params.append(cliente_id)
+        query += " ORDER BY o.fecha_recepcion DESC"
+        cursor.execute(query, tuple(params))
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _q_tab2_imile_entregas() -> dict:
+    conn = get_cached_connection("logistica")
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("""
+            SELECT orden, SUM(total_seriales) as entregados
+            FROM gestiones_mensajero
+            WHERE UPPER(TRIM(cliente)) = 'IMILE SAS'
+            GROUP BY orden
+        """)
+        result = {}
+        for r in cursor.fetchall():
+            s = str(r['orden']).strip()
+            key = s[:-2] if s.endswith('.0') else s
+            result[key] = int(r['entregados'] or 0)
+        return result
+    finally:
+        cursor.close()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _q_tab2_stats_mes() -> dict:
+    conn = get_cached_connection("logistica")
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("""
+            SELECT COUNT(*) as total_ordenes,
+                   SUM(o.cantidad_total) as total_items,
+                   SUM(COALESCE(o.cantidad_entregados_local, 0) + COALESCE(o.cantidad_entregados_nacional, 0)) as entregados,
+                   SUM(COALESCE(o.cantidad_devolucion_local, 0) + COALESCE(o.cantidad_devolucion_nacional, 0)) as devoluciones,
+                   SUM(o.valor_total) as ingresos
+            FROM ordenes o
+            WHERE MONTH(o.fecha_recepcion) = MONTH(CURRENT_DATE)
+            AND YEAR(o.fecha_recepcion) = YEAR(CURRENT_DATE)
+        """)
+        return cursor.fetchone() or {}
+    finally:
+        cursor.close()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _q_tab3(anio: int, mes_num) -> list:
+    conn = get_cached_connection("logistica")
+    cursor = conn.cursor(dictionary=True)
+    try:
+        mf = "AND MONTH(op.fecha_asignacion) = %s" if mes_num else ""
+        p = [anio, mes_num] if mes_num else [anio]
+        cursor.execute(f"""
+            SELECT p.codigo, p.nombre_completo, p.tipo_personal,
+                   COUNT(DISTINCT op.orden_id) as ordenes_trabajadas,
+                   SUM(op.cantidad_asignada) as items_asignados,
+                   SUM(op.cantidad_entregada) as items_entregados,
+                   SUM(op.cantidad_devolucion) as items_devueltos,
+                   SUM(op.total_pagar) as ingresos_generados,
+                   CASE WHEN SUM(op.cantidad_asignada) > 0
+                       THEN (SUM(op.cantidad_entregada) / SUM(op.cantidad_asignada) * 100)
+                       ELSE 0 END as tasa_exito
+            FROM personal p
+            LEFT JOIN orden_personal op ON p.id = op.personal_id
+            WHERE YEAR(op.fecha_asignacion) = %s {mf}
+            GROUP BY p.id, p.codigo, p.nombre_completo, p.tipo_personal
+            HAVING ordenes_trabajadas > 0 ORDER BY items_entregados DESC
+        """, p)
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _q_tab4_clientes() -> list:
+    conn = get_cached_connection("logistica")
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("""
+            SELECT DISTINCT c.id, c.nombre_empresa
+            FROM clientes c JOIN ordenes o ON c.id = o.cliente_id
+            ORDER BY c.nombre_empresa
+        """)
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _q_tab4_detalle(fecha_desde, fecha_hasta, cliente_id) -> dict:
+    conn = get_cached_connection("logistica")
+    cursor = conn.cursor(dictionary=True)
+    try:
+        query = """
+            SELECT o.numero_orden, c.nombre_empresa as cliente, o.fecha_recepcion,
+                   o.cantidad_total as items, o.valor_total as total_vendido, o.estado
+            FROM ordenes o JOIN clientes c ON o.cliente_id = c.id
+            WHERE o.fecha_recepcion BETWEEN %s AND %s
+        """
+        params = [fecha_desde, fecha_hasta]
+        if cliente_id:
+            query += " AND o.cliente_id = %s"
+            params.append(cliente_id)
+        query += " ORDER BY c.nombre_empresa, o.fecha_recepcion DESC"
+        cursor.execute(query, tuple(params))
+        ordenes = cursor.fetchall()
+
+        cursor.execute("""
+            SELECT orden, UPPER(TRIM(cliente)) as cliente,
+                   SUM(valor_total) as costo_mensajeros
+            FROM gestiones_mensajero
+            WHERE fecha_registro BETWEEN %s AND %s
+            GROUP BY orden, UPPER(TRIM(cliente))
+        """, (fecha_desde, fecha_hasta))
+        costos_msg = cursor.fetchall()
+
+        return dict(ordenes=ordenes, costos_msg=costos_msg)
+    finally:
+        cursor.close()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _q_tab5(anio: int) -> dict:
+    conn = get_cached_connection("logistica")
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("""
+            SELECT MONTH(o.fecha_recepcion) as mes,
+                   SUM(o.valor_total) as ingresos,
+                   SUM(o.cantidad_total) as items_totales
+            FROM ordenes o WHERE YEAR(o.fecha_recepcion) = %s
+            GROUP BY MONTH(o.fecha_recepcion) ORDER BY mes
+        """, (anio,))
+        datos_mensuales = cursor.fetchall()
+
+        # Costos mensajeros por mes — sin TRIM/REPLACE JOIN
+        cursor.execute("""
+            SELECT MONTH(gm.fecha_escaner) as mes,
+                   SUM(gm.valor_total) as costo_mensajeros
+            FROM gestiones_mensajero gm
+            WHERE YEAR(gm.fecha_escaner) = %s
+            GROUP BY MONTH(gm.fecha_escaner) ORDER BY mes
+        """, (anio,))
+        costos_msg_mes = {r['mes']: float(r['costo_mensajeros'] or 0) for r in cursor.fetchall()}
+
+        cursor.execute("""
+            SELECT mes, SUM(total) as total_alistamiento FROM (
+                SELECT MONTH(fecha) as mes, total FROM registro_horas WHERE YEAR(fecha) = %s
+                UNION ALL
+                SELECT MONTH(fecha) as mes, total FROM registro_labores WHERE YEAR(fecha) = %s
+                UNION ALL
+                SELECT MONTH(fecha) as mes, total FROM subsidio_transporte WHERE YEAR(fecha) = %s
+            ) t GROUP BY mes ORDER BY mes
+        """, (anio, anio, anio))
+        alistamiento_mes = {r['mes']: float(r['total_alistamiento'] or 0) for r in cursor.fetchall()}
+
+        cursor.execute("""
+            SELECT MONTH(ft.fecha_factura) as mes,
+                   SUM(dft.costo_asignado) as costo_transporte
+            FROM detalle_facturas_transporte dft
+            JOIN facturas_transporte ft ON dft.factura_id = ft.id
+            WHERE YEAR(ft.fecha_factura) = %s AND ft.estado != 'anulada'
+            GROUP BY MONTH(ft.fecha_factura) ORDER BY mes
+        """, (anio,))
+        costos_transp_mes = {r['mes']: float(r['costo_transporte'] or 0) for r in cursor.fetchall()}
+
+        cursor.execute("""
+            SELECT MONTH(fecha) as mes, SUM(monto) as total_gastos
+            FROM gastos_administrativos WHERE YEAR(fecha) = %s
+            GROUP BY MONTH(fecha) ORDER BY mes
+        """, (anio,))
+        gastos_admin_mes = {r['mes']: float(r['total_gastos'] or 0) for r in cursor.fetchall()}
+
+        cursor.execute("""
+            SELECT periodo_mes as mes, SUM(costo_total_empleado) as total_nomina
+            FROM nomina_provisiones WHERE periodo_anio = %s
+            GROUP BY periodo_mes ORDER BY mes
+        """, (anio,))
+        nomina_mes = {r['mes']: float(r['total_nomina'] or 0) for r in cursor.fetchall()}
+
+        # Entregas/devoluciones por mes (agrupado por fecha de orden — requiere JOIN)
+        cursor.execute("""
+            SELECT MONTH(o.fecha_recepcion) as mes,
+                   SUM(CASE WHEN gm.tipo_gestion LIKE '%%Entrega%%' THEN gm.total_seriales ELSE 0 END) as entregados,
+                   SUM(CASE WHEN gm.tipo_gestion NOT LIKE '%%Entrega%%' THEN gm.total_seriales ELSE 0 END) as devoluciones
+            FROM gestiones_mensajero gm
+            JOIN ordenes o ON TRIM(REPLACE(gm.orden, '.0', '')) = TRIM(REPLACE(o.numero_orden, '.0', ''))
+            WHERE YEAR(o.fecha_recepcion) = %s
+            GROUP BY MONTH(o.fecha_recepcion) ORDER BY mes
+        """, (anio,))
+        gestiones_mes = {
+            r['mes']: {'entregados': int(r['entregados'] or 0), 'devoluciones': int(r['devoluciones'] or 0)}
+            for r in cursor.fetchall()
+        }
+
+        cursor.execute("""
+            SELECT MONTH(o.fecha_recepcion) as mes,
+                   UPPER(TRIM(c.nombre_empresa)) as cliente,
+                   SUM(o.valor_total) as ingresos
+            FROM ordenes o JOIN clientes c ON o.cliente_id = c.id
+            WHERE YEAR(o.fecha_recepcion) = %s
+            GROUP BY MONTH(o.fecha_recepcion), UPPER(TRIM(c.nombre_empresa)) ORDER BY mes
+        """, (anio,))
+        ingresos_cliente_mes = cursor.fetchall()
+
+        cursor.execute("""
+            SELECT MONTH(fecha) as mes, categoria, SUM(monto) as total
+            FROM gastos_administrativos WHERE YEAR(fecha) = %s
+            GROUP BY MONTH(fecha), categoria ORDER BY mes
+        """, (anio,))
+        gastos_cat_mes = cursor.fetchall()
+
+        return dict(
+            datos_mensuales=datos_mensuales,
+            costos_msg_mes=costos_msg_mes,
+            alistamiento_mes=alistamiento_mes,
+            costos_transp_mes=costos_transp_mes,
+            gastos_admin_mes=gastos_admin_mes,
+            nomina_mes=nomina_mes,
+            gestiones_mes=gestiones_mes,
+            ingresos_cliente_mes=ingresos_cliente_mes,
+            gastos_cat_mes=gastos_cat_mes,
+        )
+    finally:
+        cursor.close()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _q_tab6(anio: int, mes_num) -> dict:
+    conn = get_cached_connection("logistica")
+    cursor = conn.cursor(dictionary=True)
+    try:
+        mf_rec = "AND MONTH(o.fecha_recepcion) = %s" if mes_num else ""
+        mf_per = "AND fe.periodo_mes = %s" if mes_num else ""
+        mf_esc = "AND MONTH(gm.fecha_escaner) = %s" if mes_num else ""
+        mf_fec = "AND MONTH(fecha) = %s" if mes_num else ""
+        mf_fac = "AND MONTH(ft.fecha_factura) = %s" if mes_num else ""
+        mf_nom = "AND periodo_mes = %s" if mes_num else ""
+        p = [anio, mes_num] if mes_num else [anio]
+
+        cursor.execute(f"""
+            SELECT UPPER(TRIM(c.nombre_empresa)) as cliente, SUM(o.valor_total) as valor_ordenes
+            FROM ordenes o JOIN clientes c ON o.cliente_id = c.id
+            WHERE YEAR(o.fecha_recepcion) = %s {mf_rec}
+            GROUP BY UPPER(TRIM(c.nombre_empresa))
+        """, p)
+        valor_ordenes_cli = {r['cliente']: float(r['valor_ordenes'] or 0) for r in cursor.fetchall()}
+
+        cursor.execute(f"""
+            SELECT UPPER(TRIM(c.nombre_empresa)) as cliente,
+                   SUM(fe.total) as facturado, SUM(fe.saldo_pendiente) as saldo_pendiente
+            FROM facturas_emitidas fe JOIN clientes c ON fe.cliente_id = c.id
+            WHERE fe.periodo_anio = %s {mf_per} AND fe.estado != 'anulada'
+            GROUP BY UPPER(TRIM(c.nombre_empresa))
+        """, p)
+        facturado_cli = {
+            r['cliente']: {'facturado': float(r['facturado'] or 0), 'saldo': float(r['saldo_pendiente'] or 0)}
+            for r in cursor.fetchall()
+        }
+
+        cursor.execute(f"""
+            SELECT UPPER(TRIM(c.nombre_empresa)) as cliente, SUM(pr.monto) as cobrado
+            FROM pagos_recibidos pr
+            JOIN facturas_emitidas fe ON pr.factura_id = fe.id
+            JOIN clientes c ON fe.cliente_id = c.id
+            WHERE fe.periodo_anio = %s {mf_per} AND fe.estado != 'anulada'
+            GROUP BY UPPER(TRIM(c.nombre_empresa))
+        """, p)
+        cobrado_cli = {r['cliente']: float(r['cobrado'] or 0) for r in cursor.fetchall()}
+
+        cursor.execute(f"""
+            SELECT p.nombre_completo, p.codigo,
+                   COUNT(DISTINCT gm.lot_esc) as planillas,
+                   SUM(gm.total_seriales) as seriales,
+                   SUM(gm.valor_total) as estimado,
+                   SUM(CASE WHEN gm.facturado_liq IS NOT NULL THEN gm.valor_total ELSE 0 END) as en_liq,
+                   SUM(CASE WHEN fr.estado = 'pagada' THEN gm.valor_total ELSE 0 END) as pagado
+            FROM gestiones_mensajero gm
+            JOIN personal p ON CAST(gm.cod_mensajero AS UNSIGNED) = CAST(p.codigo AS UNSIGNED)
+            LEFT JOIN facturas_recibidas fr ON gm.facturado_liq = fr.id
+            WHERE YEAR(gm.fecha_escaner) = %s {mf_esc}
+            GROUP BY p.id, p.nombre_completo, p.codigo ORDER BY p.nombre_completo
+        """, p)
+        estimado_msg = {r['codigo']: {
+            'nombre': r['nombre_completo'],
+            'planillas': int(r['planillas'] or 0),
+            'seriales': int(r['seriales'] or 0),
+            'estimado': float(r['estimado'] or 0),
+            'en_liq': float(r['en_liq'] or 0),
+            'pagado': float(r['pagado'] or 0),
+        } for r in cursor.fetchall()}
+
+        if mes_num:
+            mf_alist = "AND MONTH(fecha) = %s"
+            p_alist = [anio, mes_num, anio, mes_num]
+        else:
+            mf_alist = ""
+            p_alist = [anio, anio]
+        cursor.execute(f"""
+            SELECT p.nombre_completo, p.codigo,
+                   SUM(combined.total) as estimado,
+                   SUM(CASE WHEN combined.liquidado = 1 THEN combined.total ELSE 0 END) as pagado
+            FROM (
+                SELECT personal_id, total, liquidado FROM registro_horas WHERE YEAR(fecha) = %s {mf_alist}
+                UNION ALL
+                SELECT personal_id, total, liquidado FROM registro_labores WHERE YEAR(fecha) = %s {mf_alist}
+            ) combined
+            JOIN personal p ON combined.personal_id = p.id
+            GROUP BY p.id, p.nombre_completo, p.codigo ORDER BY p.nombre_completo
+        """, p_alist)
+        estimado_alist = {r['codigo']: {
+            'nombre': r['nombre_completo'],
+            'estimado': float(r['estimado'] or 0),
+            'pagado': float(r['pagado'] or 0),
+        } for r in cursor.fetchall()}
+
+        cursor.execute(f"""
+            SELECT SUM(dft.costo_asignado) as total
+            FROM detalle_facturas_transporte dft
+            JOIN facturas_transporte ft ON dft.factura_id = ft.id
+            WHERE YEAR(ft.fecha_factura) = %s {mf_fac} AND ft.estado != 'anulada'
+        """, p)
+        r = cursor.fetchone()
+        costo_transp = float((r or {}).get('total') or 0)
+
+        cursor.execute(
+            f"SELECT SUM(monto) as total FROM gastos_administrativos WHERE YEAR(fecha) = %s {mf_fec}", p
+        )
+        r = cursor.fetchone()
+        gastos_admin = float((r or {}).get('total') or 0)
+
+        cursor.execute(
+            f"SELECT SUM(costo_total_empleado) as total FROM nomina_provisiones WHERE periodo_anio = %s {mf_nom}", p
+        )
+        r = cursor.fetchone()
+        nomina = float((r or {}).get('total') or 0)
+
+        return dict(
+            valor_ordenes_cli=valor_ordenes_cli,
+            facturado_cli=facturado_cli,
+            cobrado_cli=cobrado_cli,
+            estimado_msg=estimado_msg,
+            estimado_alist=estimado_alist,
+            costo_transp=costo_transp,
+            gastos_admin=gastos_admin,
+            nomina=nomina,
+        )
+    finally:
+        cursor.close()
+
+
+# ── CSS personalizado ─────────────────────────────────────────────────────────
 st.markdown("""
 <style>
     .metric-card {
@@ -72,13 +666,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Header principal
 st.markdown("# 📊 Centro de Reportes y Análisis")
 st.markdown("---")
-
-conn = conectar_logistica()
-if not conn:
-    st.stop()
 
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "💰 Rentabilidad General",
@@ -89,8 +678,10 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "💳 Cartera y Rentabilidad Real"
 ])
 
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 1 — Rentabilidad General
+# ══════════════════════════════════════════════════════════════════════════════
 with tab1:
-    # Filtros en un contenedor más elegante
     with st.container():
         st.markdown("#### 🔍 Filtros de Período")
         col1, col2, col3 = st.columns([1, 1, 2])
@@ -98,324 +689,66 @@ with tab1:
         with col1:
             anio = st.selectbox("📅 Año", options=list(range(2024, 2031)), index=list(range(2024, 2031)).index(date.today().year))
         with col2:
-            meses_lista = ["Todos", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-                          "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-            mes = st.selectbox("📆 Mes", meses_lista)
+            mes = st.selectbox("📆 Mes", MESES_LISTA)
 
     st.markdown("---")
 
-    # ========== DEBUG: Diagnóstico de Imile ==========
+    mes_num = MESES_LISTA.index(mes) if mes != "Todos" else None
+
+    # ── Diagnóstico IMILE (lazy: solo carga al hacer clic) ──
     with st.expander("🔍 Diagnóstico IMILE SAS", expanded=False):
-        try:
-            cursor_debug = conn.cursor(dictionary=True)
+        if st.button("Cargar diagnóstico IMILE", key="btn_debug_imile"):
+            st.session_state["debug_imile_loaded"] = True
+        if st.session_state.get("debug_imile_loaded"):
+            try:
+                dbg = _q_debug_imile()
+                precios_imile = dbg['precios']
+                ordenes_imile = dbg['ordenes']
+                gestiones_imile = dbg['gestiones']
 
-            # Precios configurados para Imile
-            cursor_debug.execute("""
-                SELECT pc.tipo_servicio, pc.ambito, pc.tipo_operacion,
-                       pc.precio_unitario, pc.costo_mensajero_entrega, pc.costo_mensajero_devolucion
-                FROM precios_cliente pc
-                JOIN clientes c ON pc.cliente_id = c.id
-                WHERE UPPER(c.nombre_empresa) LIKE '%IMILE%' AND pc.activo = TRUE
-            """)
-            precios_imile = cursor_debug.fetchall()
+                if precios_imile:
+                    st.markdown("**Precios configurados para IMILE:**")
+                    st.dataframe(pd.DataFrame(precios_imile), use_container_width=True, hide_index=True)
 
-            if precios_imile:
-                st.markdown("**Precios configurados para IMILE:**")
-                df_precios = pd.DataFrame(precios_imile)
-                st.dataframe(df_precios, use_container_width=True, hide_index=True)
+                if ordenes_imile:
+                    st.markdown("**Últimas 10 órdenes de IMILE (activas):**")
+                    st.dataframe(pd.DataFrame(ordenes_imile), use_container_width=True, hide_index=True)
 
-            # Valores en órdenes de Imile del mes seleccionado
-            cursor_debug.execute("""
-                SELECT o.numero_orden, o.cantidad_total, o.valor_total,
-                       o.cantidad_local, o.cantidad_nacional
-                FROM ordenes o
-                JOIN clientes c ON o.cliente_id = c.id
-                WHERE UPPER(c.nombre_empresa) LIKE '%IMILE%'
-                AND o.estado = 'activa'
-                ORDER BY o.fecha_recepcion DESC
-                LIMIT 10
-            """)
-            ordenes_imile = cursor_debug.fetchall()
-
-            if ordenes_imile:
-                st.markdown("**Últimas 10 órdenes de IMILE (activas):**")
-                df_ord = pd.DataFrame(ordenes_imile)
-                if not df_ord.empty and 'cantidad_total' in df_ord.columns:
-                    df_ord['valor_por_item'] = df_ord.apply(
-                        lambda r: r['valor_total'] / r['cantidad_total'] if r['cantidad_total'] and r['cantidad_total'] > 0 else 0, axis=1
-                    )
-                st.dataframe(df_ord, use_container_width=True, hide_index=True)
-
-            # Gestiones de mensajero para Imile
-            cursor_debug.execute("""
-                SELECT COUNT(*) as total_gestiones,
-                       SUM(total_seriales) as total_seriales,
-                       SUM(valor_total) as costo_total_mensajeros,
-                       AVG(valor_unitario) as valor_unitario_promedio
-                FROM gestiones_mensajero
-                WHERE UPPER(cliente) LIKE '%IMILE%'
-                AND YEAR(fecha_registro) = YEAR(CURRENT_DATE)
-                AND MONTH(fecha_registro) = MONTH(CURRENT_DATE)
-            """)
-            gestiones_imile = cursor_debug.fetchone()
-
-            if gestiones_imile and gestiones_imile['total_gestiones']:
-                st.markdown("**Gestiones de mensajero IMILE (mes actual):**")
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    st.metric("Gestiones", gestiones_imile['total_gestiones'])
-                with col2:
-                    st.metric("Seriales", f"{gestiones_imile['total_seriales']:,}")
-                with col3:
-                    st.metric("Costo Mensajeros", f"${gestiones_imile['costo_total_mensajeros']:,.0f}")
-                with col4:
-                    st.metric("$/unidad promedio", f"${gestiones_imile['valor_unitario_promedio']:,.0f}")
-
-            cursor_debug.close()
-        except Exception as e:
-            st.error(f"Error en diagnóstico: {e}")
+                if gestiones_imile and gestiones_imile['total_gestiones']:
+                    st.markdown("**Gestiones de mensajero IMILE (mes actual):**")
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        st.metric("Gestiones", gestiones_imile['total_gestiones'])
+                    with col2:
+                        st.metric("Seriales", f"{gestiones_imile['total_seriales']:,}")
+                    with col3:
+                        st.metric("Costo Mensajeros", f"${gestiones_imile['costo_total_mensajeros']:,.0f}")
+                    with col4:
+                        st.metric("$/unidad promedio", f"${gestiones_imile['valor_unitario_promedio']:,.0f}")
+            except Exception as e:
+                st.error(f"Error en diagnóstico: {e}")
 
     try:
-        cursor = conn.cursor(dictionary=True)
+        with st.spinner("Cargando rentabilidad..."):
+            d = _q_tab1(anio, mes_num)
 
-        # Determinar mes numerico
-        if mes != "Todos":
-            mes_num = meses_lista.index(mes)
-        else:
-            mes_num = None
+        costos_mensajeros = d['costos_mensajeros']
+        costos_transporte = d['costos_transporte']
+        total_gastos_admin = d['total_gastos_admin']
+        gastos_por_categoria = d['gastos_por_categoria']
+        nomina_raw = d['nomina']
+        total_nomina = float(nomina_raw.get('total_nomina') or 0)
+        total_salarios = float(nomina_raw.get('total_salarios') or 0)
+        total_seg_social = float(nomina_raw.get('total_ss') or 0)
+        total_provisiones = float(nomina_raw.get('total_prov') or 0)
+        total_alistamiento = d['total_alistamiento']
+        gestiones_cliente = d['gestiones_cliente']
+        resultados = d['resultados']
+        ordenes_detalle = d['ordenes_detalle']
 
-        # ============ OBTENER TODOS LOS DATOS ============
-
-        # 1. Costos de mensajeros por cliente - filtrado por fecha de la GESTIÓN (fecha_escaner)
-        # Así se capturan todas las gestiones realizadas en el período, sin importar la fecha de la orden
-        if mes_num:
-            cursor.execute("""
-                SELECT
-                    UPPER(TRIM(c.nombre_empresa)) as cliente,
-                    SUM(gm.valor_total) as costo_mensajeros
-                FROM gestiones_mensajero gm
-                JOIN ordenes o ON TRIM(REPLACE(gm.orden, '.0', '')) = TRIM(REPLACE(o.numero_orden, '.0', ''))
-                JOIN clientes c ON o.cliente_id = c.id
-                WHERE YEAR(gm.fecha_escaner) = %s AND MONTH(gm.fecha_escaner) = %s
-                GROUP BY UPPER(TRIM(c.nombre_empresa))
-            """, (anio, mes_num))
-        else:
-            cursor.execute("""
-                SELECT
-                    UPPER(TRIM(c.nombre_empresa)) as cliente,
-                    SUM(gm.valor_total) as costo_mensajeros
-                FROM gestiones_mensajero gm
-                JOIN ordenes o ON TRIM(REPLACE(gm.orden, '.0', '')) = TRIM(REPLACE(o.numero_orden, '.0', ''))
-                JOIN clientes c ON o.cliente_id = c.id
-                WHERE YEAR(gm.fecha_escaner) = %s
-                GROUP BY UPPER(TRIM(c.nombre_empresa))
-            """, (anio,))
-
-        costos_mensajeros = {r['cliente']: float(r['costo_mensajeros'] or 0) for r in cursor.fetchall()}
         total_costo_mensajeros = sum(costos_mensajeros.values())
-
-        # 2. Costos de transporte por cliente
-        if mes_num:
-            cursor.execute("""
-                SELECT UPPER(TRIM(c.nombre_empresa)) as cliente, SUM(dft.costo_asignado) as costo_transporte
-                FROM detalle_facturas_transporte dft
-                JOIN facturas_transporte ft ON dft.factura_id = ft.id
-                JOIN ordenes o ON dft.orden_id = o.id
-                JOIN clientes c ON o.cliente_id = c.id
-                WHERE YEAR(ft.fecha_factura) = %s AND MONTH(ft.fecha_factura) = %s
-                AND ft.estado != 'anulada'
-                GROUP BY UPPER(TRIM(c.nombre_empresa))
-            """, (anio, mes_num))
-        else:
-            cursor.execute("""
-                SELECT UPPER(TRIM(c.nombre_empresa)) as cliente, SUM(dft.costo_asignado) as costo_transporte
-                FROM detalle_facturas_transporte dft
-                JOIN facturas_transporte ft ON dft.factura_id = ft.id
-                JOIN ordenes o ON dft.orden_id = o.id
-                JOIN clientes c ON o.cliente_id = c.id
-                WHERE YEAR(ft.fecha_factura) = %s
-                AND ft.estado != 'anulada'
-                GROUP BY UPPER(TRIM(c.nombre_empresa))
-            """, (anio,))
-
-        costos_transporte = {r['cliente']: float(r['costo_transporte'] or 0) for r in cursor.fetchall()}
         total_costo_transporte = sum(costos_transporte.values())
 
-        # 3. Gastos administrativos
-        if mes_num:
-            cursor.execute("""
-                SELECT SUM(monto) as total_gastos
-                FROM gastos_administrativos
-                WHERE YEAR(fecha) = %s AND MONTH(fecha) = %s
-            """, (anio, mes_num))
-        else:
-            cursor.execute("""
-                SELECT SUM(monto) as total_gastos
-                FROM gastos_administrativos
-                WHERE YEAR(fecha) = %s
-            """, (anio,))
-
-        result_gastos = cursor.fetchone()
-        total_gastos_admin = float(result_gastos['total_gastos'] or 0) if result_gastos else 0
-
-        # 4. Desglose de gastos administrativos por categoría
-        if mes_num:
-            cursor.execute("""
-                SELECT categoria, SUM(monto) as total
-                FROM gastos_administrativos
-                WHERE YEAR(fecha) = %s AND MONTH(fecha) = %s
-                GROUP BY categoria
-                ORDER BY total DESC
-            """, (anio, mes_num))
-        else:
-            cursor.execute("""
-                SELECT categoria, SUM(monto) as total
-                FROM gastos_administrativos
-                WHERE YEAR(fecha) = %s
-                GROUP BY categoria
-                ORDER BY total DESC
-            """, (anio,))
-
-        gastos_por_categoria = {r['categoria']: float(r['total'] or 0) for r in cursor.fetchall()}
-
-        # 4.5 Gastos de Nómina
-        if mes_num:
-            cursor.execute("""
-                SELECT
-                    SUM(costo_total_empleado) as total_nomina,
-                    SUM(salario_base + auxilio_transporte + auxilio_no_salarial) as total_salarios,
-                    SUM(total_seguridad_social) as total_seguridad_social,
-                    SUM(total_provisiones) as total_provisiones
-                FROM nomina_provisiones
-                WHERE periodo_anio = %s AND periodo_mes = %s
-            """, (anio, mes_num))
-        else:
-            cursor.execute("""
-                SELECT
-                    SUM(costo_total_empleado) as total_nomina,
-                    SUM(salario_base + auxilio_transporte + auxilio_no_salarial) as total_salarios,
-                    SUM(total_seguridad_social) as total_seguridad_social,
-                    SUM(total_provisiones) as total_provisiones
-                FROM nomina_provisiones
-                WHERE periodo_anio = %s
-            """, (anio,))
-
-        result_nomina = cursor.fetchone()
-        total_nomina = float(result_nomina['total_nomina'] or 0) if result_nomina else 0
-        total_salarios = float(result_nomina['total_salarios'] or 0) if result_nomina else 0
-        total_seg_social = float(result_nomina['total_seguridad_social'] or 0) if result_nomina else 0
-        total_provisiones = float(result_nomina['total_provisiones'] or 0) if result_nomina else 0
-
-        # 4.6 Costos de Alistamiento (registro_horas + registro_labores + subsidio_transporte)
-        # Mismas tablas que usa Facturación → Pago Personal → Alistamiento
-        if mes_num:
-            cursor.execute("""
-                SELECT SUM(total) as total_alistamiento FROM (
-                    SELECT total FROM registro_horas
-                    WHERE YEAR(fecha) = %s AND MONTH(fecha) = %s
-                    UNION ALL
-                    SELECT total FROM registro_labores
-                    WHERE YEAR(fecha) = %s AND MONTH(fecha) = %s
-                    UNION ALL
-                    SELECT total FROM subsidio_transporte
-                    WHERE YEAR(fecha) = %s AND MONTH(fecha) = %s
-                ) t
-            """, (anio, mes_num, anio, mes_num, anio, mes_num))
-        else:
-            cursor.execute("""
-                SELECT SUM(total) as total_alistamiento FROM (
-                    SELECT total FROM registro_horas
-                    WHERE YEAR(fecha) = %s
-                    UNION ALL
-                    SELECT total FROM registro_labores
-                    WHERE YEAR(fecha) = %s
-                    UNION ALL
-                    SELECT total FROM subsidio_transporte
-                    WHERE YEAR(fecha) = %s
-                ) t
-            """, (anio, anio, anio))
-
-        result_alistamiento = cursor.fetchone()
-        total_alistamiento = float(result_alistamiento['total_alistamiento'] or 0) if result_alistamiento else 0
-
-        # 5. Entregas y devoluciones por cliente - filtrado por fecha de la GESTIÓN (fecha_escaner)
-        if mes_num:
-            cursor.execute("""
-                SELECT UPPER(TRIM(c.nombre_empresa)) as cliente,
-                    SUM(CASE WHEN gm.tipo_gestion LIKE '%%Entrega%%' THEN gm.total_seriales ELSE 0 END) as entregados,
-                    SUM(CASE WHEN gm.tipo_gestion NOT LIKE '%%Entrega%%' THEN gm.total_seriales ELSE 0 END) as devoluciones
-                FROM gestiones_mensajero gm
-                JOIN ordenes o ON TRIM(REPLACE(gm.orden, '.0', '')) = TRIM(REPLACE(o.numero_orden, '.0', ''))
-                JOIN clientes c ON o.cliente_id = c.id
-                WHERE YEAR(gm.fecha_escaner) = %s AND MONTH(gm.fecha_escaner) = %s
-                GROUP BY UPPER(TRIM(c.nombre_empresa))
-            """, (anio, mes_num))
-        else:
-            cursor.execute("""
-                SELECT UPPER(TRIM(c.nombre_empresa)) as cliente,
-                    SUM(CASE WHEN gm.tipo_gestion LIKE '%%Entrega%%' THEN gm.total_seriales ELSE 0 END) as entregados,
-                    SUM(CASE WHEN gm.tipo_gestion NOT LIKE '%%Entrega%%' THEN gm.total_seriales ELSE 0 END) as devoluciones
-                FROM gestiones_mensajero gm
-                JOIN ordenes o ON TRIM(REPLACE(gm.orden, '.0', '')) = TRIM(REPLACE(o.numero_orden, '.0', ''))
-                JOIN clientes c ON o.cliente_id = c.id
-                WHERE YEAR(gm.fecha_escaner) = %s
-                GROUP BY UPPER(TRIM(c.nombre_empresa))
-            """, (anio,))
-
-        gestiones_cliente = {r['cliente']: {'entregados': int(r['entregados'] or 0), 'devoluciones': int(r['devoluciones'] or 0)} for r in cursor.fetchall()}
-
-        # 6. Query principal de ordenes
-        # NOTA: costo_total de ordenes NO se usa porque duplica registro_horas/labores y gestiones_mensajero
-        query = """
-            SELECT
-                c.nombre_empresa as cliente,
-                COUNT(DISTINCT o.id) as total_ordenes,
-                SUM(o.cantidad_total) as total_items,
-                SUM(o.valor_total) as ingresos,
-                0 as costos_operativos,
-                SUM(o.valor_total) as utilidad_base
-            FROM clientes c
-            LEFT JOIN ordenes o ON c.id = o.cliente_id
-            WHERE YEAR(o.fecha_recepcion) = %s
-        """
-
-        params = [anio]
-
-        if mes_num:
-            query += " AND MONTH(o.fecha_recepcion) = %s"
-            params.append(mes_num)
-
-        query += " GROUP BY c.id, c.nombre_empresa HAVING COUNT(DISTINCT o.id) > 0 ORDER BY utilidad_base DESC"
-
-        cursor.execute(query, tuple(params))
-        resultados = cursor.fetchall()
-
-        # 7. Detalle de órdenes por cliente (para mostrar en el expander)
-        query_ordenes = """
-            SELECT
-                UPPER(TRIM(c.nombre_empresa)) as cliente,
-                o.numero_orden,
-                o.cantidad_total as items_totales,
-                COALESCE(o.cantidad_entregados_local, 0) + COALESCE(o.cantidad_entregados_nacional, 0) as entregas,
-                COALESCE(o.cantidad_devolucion_local, 0) + COALESCE(o.cantidad_devolucion_nacional, 0) as devoluciones,
-                o.fecha_recepcion,
-                o.estado
-            FROM ordenes o
-            JOIN clientes c ON o.cliente_id = c.id
-            WHERE YEAR(o.fecha_recepcion) = %s
-        """
-        params_ordenes = [anio]
-
-        if mes_num:
-            query_ordenes += " AND MONTH(o.fecha_recepcion) = %s"
-            params_ordenes.append(mes_num)
-
-        query_ordenes += " ORDER BY o.fecha_recepcion DESC"
-
-        cursor.execute(query_ordenes, tuple(params_ordenes))
-        ordenes_detalle = cursor.fetchall()
-
-        # Agrupar órdenes por cliente
         ordenes_por_cliente = {}
         for orden in ordenes_detalle:
             cliente_key = orden['cliente']
@@ -424,7 +757,6 @@ with tab1:
             ordenes_por_cliente[cliente_key].append(orden)
 
         if resultados or costos_mensajeros or gestiones_cliente:
-            # Procesar resultados
             datos_procesados = []
             for r in resultados:
                 cliente_upper = r['cliente'].strip().upper()
@@ -454,11 +786,7 @@ with tab1:
 
             datos_procesados = sorted(datos_procesados, key=lambda x: x['utilidad'], reverse=True)
 
-            # ============ DASHBOARD PRINCIPAL ============
-
-            # Calcular totales
             total_ingresos = sum([r['ingresos'] for r in datos_procesados])
-            # costos_operativos de ordenes NO se suma — duplica registro_horas/labores y gestiones_mensajero
             total_costos_directos = total_costo_mensajeros + total_costo_transporte + total_alistamiento
             utilidad_bruta = total_ingresos - total_costos_directos
             total_gastos_fijos = total_gastos_admin + total_nomina
@@ -466,53 +794,30 @@ with tab1:
             margen_bruto = (utilidad_bruta / total_ingresos * 100) if total_ingresos > 0 else 0
             margen_neto = (utilidad_neta / total_ingresos * 100) if total_ingresos > 0 else 0
 
-            # ===== SECCIÓN 1: RESUMEN EJECUTIVO =====
             st.markdown('<div class="section-header">📈 RESUMEN EJECUTIVO</div>', unsafe_allow_html=True)
 
             col1, col2, col3, col4 = st.columns(4)
 
             with col1:
-                st.metric(
-                    label="💵 Ingresos Totales",
-                    value=f"${total_ingresos:,.0f}",
-                    delta=None
-                )
-
+                st.metric(label="💵 Ingresos Totales", value=f"${total_ingresos:,.0f}", delta=None)
             with col2:
-                st.metric(
-                    label="📊 Utilidad Bruta",
-                    value=f"${utilidad_bruta:,.0f}",
-                    delta=f"{margen_bruto:.1f}% margen"
-                )
-
+                st.metric(label="📊 Utilidad Bruta", value=f"${utilidad_bruta:,.0f}", delta=f"{margen_bruto:.1f}% margen")
             with col3:
                 delta_color = "normal" if utilidad_neta >= 0 else "inverse"
-                st.metric(
-                    label="💰 Utilidad Neta",
-                    value=f"${utilidad_neta:,.0f}",
-                    delta=f"{margen_neto:.1f}% margen",
-                    delta_color=delta_color
-                )
-
+                st.metric(label="💰 Utilidad Neta", value=f"${utilidad_neta:,.0f}", delta=f"{margen_neto:.1f}% margen", delta_color=delta_color)
             with col4:
                 total_entregados = sum([r['entregados'] for r in datos_procesados])
                 total_devoluciones = sum([r['devoluciones'] for r in datos_procesados])
                 tasa_exito = (total_entregados / (total_entregados + total_devoluciones) * 100) if (total_entregados + total_devoluciones) > 0 else 0
-                st.metric(
-                    label="✅ Tasa de Éxito",
-                    value=f"{tasa_exito:.1f}%",
-                    delta=f"{total_entregados:,} entregas"
-                )
+                st.metric(label="✅ Tasa de Éxito", value=f"{tasa_exito:.1f}%", delta=f"{total_entregados:,} entregas")
 
             st.markdown("---")
 
-            # ===== SECCIÓN 2: DESGLOSE DE COSTOS =====
             st.markdown('<div class="section-header">💸 DESGLOSE DE COSTOS</div>', unsafe_allow_html=True)
 
             col1, col2 = st.columns([2, 1])
 
             with col1:
-                # Tabla de costos
                 costos_data = {
                     'Concepto': [
                         '🏍️ Costo Mensajeros',
@@ -539,36 +844,18 @@ with tab1:
                 df_costos = pd.DataFrame(costos_data)
                 st.dataframe(df_costos, use_container_width=True, hide_index=True)
 
-                # Total de costos
                 total_todos_costos = total_costo_mensajeros + total_alistamiento + total_costo_transporte + total_gastos_admin + total_nomina
                 st.markdown(f"**Total Costos: ${total_todos_costos:,.0f}** ({(total_todos_costos/total_ingresos*100) if total_ingresos > 0 else 0:.1f}% de ingresos)")
 
             with col2:
-                # Gráfico de costos
                 if gastos_por_categoria:
                     st.markdown("**📊 Gastos Admin. por Categoría**")
-                    CATEGORIAS_NOMBRES = {
-                        'mantenimiento': 'Mantenimiento',
-                        'polizas': 'Pólizas',
-                        'servicios_publicos': 'Serv. Públicos',
-                        'caja_menor': 'Caja Menor',
-                        'papeleria': 'Papelería',
-                        'aseo': 'Aseo',
-                        'internet': 'Internet',
-                        'software': 'Software',
-                        'alquiler_equipos': 'Alq. Equipos',
-                        'arriendo': 'Arriendo',
-                        'honorarios': 'Honorarios',
-                        'impuestos': 'Impuestos',
-                        'otros': 'Otros'
-                    }
                     df_gastos = pd.DataFrame({
                         'Categoría': [CATEGORIAS_NOMBRES.get(k, k) for k in gastos_por_categoria.keys()],
                         'Monto': list(gastos_por_categoria.values())
                     })
                     st.bar_chart(df_gastos.set_index('Categoría'))
 
-                # Desglose de Nómina
                 if total_nomina > 0:
                     st.markdown("**👥 Desglose de Nómina**")
                     nomina_desglose = pd.DataFrame({
@@ -579,10 +866,8 @@ with tab1:
 
             st.markdown("---")
 
-            # ===== SECCIÓN 3: RENTABILIDAD POR CLIENTE =====
             st.markdown('<div class="section-header">👥 RENTABILIDAD POR CLIENTE</div>', unsafe_allow_html=True)
 
-            # Tabla resumen de clientes
             tabla_clientes = []
             for row in datos_procesados:
                 tabla_clientes.append({
@@ -599,7 +884,6 @@ with tab1:
             df_clientes = pd.DataFrame(tabla_clientes)
             st.dataframe(df_clientes, use_container_width=True, hide_index=True)
 
-            # Detalle expandible por cliente
             st.markdown("#### 🔍 Detalle por Cliente")
 
             for row in datos_procesados:
@@ -608,40 +892,33 @@ with tab1:
 
                 with st.expander(f"{color} **{row['cliente']}** | Utilidad: ${row['utilidad']:,.0f} | Margen: {row['margen_porcentaje']:.1f}%"):
 
-                    # Fila 1: Métricas principales
                     col1, col2, col3, col4, col5 = st.columns(5)
 
                     with col1:
                         st.markdown("**📋 Operación**")
                         st.write(f"Órdenes: **{row['total_ordenes']}**")
                         st.write(f"Items: **{row['total_items']:,}**")
-
                     with col2:
                         st.markdown("**📦 Gestión**")
                         st.write(f"Entregas: **{row['entregados']:,}**")
                         st.write(f"Devoluciones: **{row['devoluciones']:,}**")
                         st.write(f"Éxito: **{tasa_exito_cliente:.1f}%**")
-
                     with col3:
                         st.markdown("**💵 Ingresos**")
                         st.write(f"Total: **${row['ingresos']:,.0f}**")
-
                     with col4:
                         st.markdown("**💸 Costos**")
                         st.write(f"Mensajeros: ${row['costo_mensajeros']:,.0f}")
                         st.write(f"Transporte: ${row['costo_transporte']:,.0f}")
                         st.write(f"**Total: ${row['costos_totales']:,.0f}**")
-
                     with col5:
                         st.markdown("**💰 Resultado**")
                         utilidad_color = "green" if row['utilidad'] >= 0 else "red"
                         st.markdown(f"<span style='color:{utilidad_color}; font-size:20px; font-weight:bold'>${row['utilidad']:,.0f}</span>", unsafe_allow_html=True)
                         st.write(f"Margen: **{row['margen_porcentaje']:.1f}%**")
 
-                    # Barra de progreso visual del margen
                     st.progress(max(0, min(row['margen_porcentaje'] / 100, 1.0)))
 
-                    # Tabla de órdenes del cliente
                     cliente_key = row['cliente'].strip().upper()
                     ordenes_cliente = ordenes_por_cliente.get(cliente_key, [])
 
@@ -677,85 +954,49 @@ with tab1:
         import traceback
         st.code(traceback.format_exc())
 
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — Estado de Órdenes
+# ══════════════════════════════════════════════════════════════════════════════
 with tab2:
     st.markdown('<div class="section-header">📦 ESTADO DE ÓRDENES</div>', unsafe_allow_html=True)
 
+    def normalizar_orden(val):
+        s = str(val).strip()
+        if s.endswith('.0'):
+            s = s[:-2]
+        return s
+
+    col1, col2, col3, col4 = st.columns([1, 1, 1.5, 1])
+
+    with col1:
+        fecha_desde_ord = st.date_input(
+            "📅 Desde",
+            value=date.today().replace(month=1, day=1),
+            key="fecha_desde_ordenes"
+        )
+    with col2:
+        fecha_hasta_ord = st.date_input(
+            "📅 Hasta",
+            value=date.today(),
+            key="fecha_hasta_ordenes"
+        )
+    with col3:
+        clientes_ord = _q_clientes_activos_con_ordenes()
+        opciones_clientes_ord = {"Todos": None}
+        for c in clientes_ord:
+            opciones_clientes_ord[c['nombre_empresa']] = c['id']
+        cliente_sel_ord = st.selectbox("👥 Cliente", list(opciones_clientes_ord.keys()), key="cliente_ordenes")
+        cliente_id_ord = opciones_clientes_ord[cliente_sel_ord]
+    with col4:
+        solo_pendientes = st.checkbox("⏳ Solo con pendientes", value=False, key="solo_pendientes_ord")
+
+    st.markdown("---")
+
     try:
-        cursor = conn.cursor(dictionary=True)
+        with st.spinner("Cargando órdenes..."):
+            ordenes_activas = _q_tab2_ordenes(fecha_desde_ord, fecha_hasta_ord, cliente_id_ord)
+            imile_entregas = _q_tab2_imile_entregas()
 
-        def normalizar_orden(val):
-            s = str(val).strip()
-            if s.endswith('.0'):
-                s = s[:-2]
-            return s
-
-        # ── Filtros ──
-        col1, col2, col3, col4 = st.columns([1, 1, 1.5, 1])
-
-        with col1:
-            fecha_desde_ord = st.date_input(
-                "📅 Desde",
-                value=date.today().replace(month=1, day=1),
-                key="fecha_desde_ordenes"
-            )
-        with col2:
-            fecha_hasta_ord = st.date_input(
-                "📅 Hasta",
-                value=date.today(),
-                key="fecha_hasta_ordenes"
-            )
-        with col3:
-            cursor.execute("""
-                SELECT DISTINCT c.id, c.nombre_empresa
-                FROM clientes c
-                JOIN ordenes o ON c.id = o.cliente_id
-                WHERE o.estado = 'activa'
-                ORDER BY c.nombre_empresa
-            """)
-            clientes_ord = cursor.fetchall()
-            opciones_clientes_ord = {"Todos": None}
-            for c in clientes_ord:
-                opciones_clientes_ord[c['nombre_empresa']] = c['id']
-            cliente_sel_ord = st.selectbox("👥 Cliente", list(opciones_clientes_ord.keys()), key="cliente_ordenes")
-            cliente_id_ord = opciones_clientes_ord[cliente_sel_ord]
-        with col4:
-            solo_pendientes = st.checkbox("⏳ Solo con pendientes", value=False, key="solo_pendientes_ord")
-
-        st.markdown("---")
-
-        # 1. Consultar órdenes activas con filtros
-        query_ord = """
-            SELECT o.numero_orden, c.nombre_empresa as cliente, cd.nombre as ciudad,
-                   o.cantidad_total, o.estado, o.fecha_recepcion,
-                   COALESCE(o.cantidad_entregados_local, 0) + COALESCE(o.cantidad_entregados_nacional, 0) as entregas_bd,
-                   COALESCE(o.cantidad_devolucion_local, 0) + COALESCE(o.cantidad_devolucion_nacional, 0) as devoluciones_bd,
-                   COALESCE(o.cantidad_en_lleva, 0) as en_lleva_bd
-            FROM ordenes o
-            JOIN clientes c ON o.cliente_id = c.id
-            LEFT JOIN ciudades cd ON o.ciudad_destino_id = cd.id
-            WHERE o.estado = 'activa'
-            AND o.fecha_recepcion BETWEEN %s AND %s
-        """
-        params_ord = [fecha_desde_ord, fecha_hasta_ord]
-
-        if cliente_id_ord:
-            query_ord += " AND o.cliente_id = %s"
-            params_ord.append(cliente_id_ord)
-
-        query_ord += " ORDER BY o.fecha_recepcion DESC"
-        cursor.execute(query_ord, tuple(params_ord))
-        ordenes_activas = cursor.fetchall()
-
-        # 2. Consultar entregas de Imile SAS desde gestiones_mensajero (todo = entrega)
-        cursor.execute("""
-            SELECT orden, SUM(total_seriales) as entregados
-            FROM gestiones_mensajero
-            WHERE UPPER(TRIM(cliente)) = 'IMILE SAS'
-            GROUP BY orden
-        """)
-        imile_entregas = {normalizar_orden(r['orden']): int(r['entregados'] or 0) for r in cursor.fetchall()}
-
-        # 3. Calcular pendiente por orden y aplicar filtro "solo pendientes"
         ordenes_procesadas = []
         for orden in ordenes_activas:
             num = normalizar_orden(orden['numero_orden'])
@@ -787,7 +1028,6 @@ with tab2:
                 'pendiente': pendiente
             })
 
-        # 4. Mostrar órdenes
         if ordenes_procesadas:
             tot_total = sum(o['total'] for o in ordenes_procesadas)
             tot_pendiente = sum(o['pendiente'] for o in ordenes_procesadas)
@@ -795,7 +1035,6 @@ with tab2:
             tot_entregados = sum(o['entregas'] for o in ordenes_procesadas)
             tot_devoluciones = sum(o['devoluciones'] for o in ordenes_procesadas)
 
-            # Métricas generales
             col1, col2, col3, col4, col5, col6 = st.columns(6)
             with col1:
                 st.metric("📋 Órdenes", len(ordenes_procesadas))
@@ -850,24 +1089,11 @@ with tab2:
                 st.info("No hay órdenes activas en el periodo seleccionado")
 
         st.markdown("---")
-
-        # Estadísticas del mes
         st.markdown('<div class="section-header">📊 ESTADÍSTICAS DEL MES ACTUAL</div>', unsafe_allow_html=True)
 
-        cursor.execute("""
-            SELECT
-                COUNT(*) as total_ordenes,
-                SUM(o.cantidad_total) as total_items,
-                SUM(COALESCE(o.cantidad_entregados_local, 0) + COALESCE(o.cantidad_entregados_nacional, 0)) as entregados,
-                SUM(COALESCE(o.cantidad_devolucion_local, 0) + COALESCE(o.cantidad_devolucion_nacional, 0)) as devoluciones,
-                SUM(o.valor_total) as ingresos
-            FROM ordenes o
-            WHERE MONTH(o.fecha_recepcion) = MONTH(CURRENT_DATE)
-            AND YEAR(o.fecha_recepcion) = YEAR(CURRENT_DATE)
-        """)
-        stats = cursor.fetchone()
+        stats = _q_tab2_stats_mes()
 
-        if stats and stats['total_ordenes'] and stats['total_ordenes'] > 0:
+        if stats and stats.get('total_ordenes') and stats['total_ordenes'] > 0:
             col1, col2, col3, col4, col5 = st.columns(5)
 
             with col1:
@@ -890,6 +1116,9 @@ with tab2:
     except Exception as e:
         st.error(f"Error: {e}")
 
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — Desempeño Personal
+# ══════════════════════════════════════════════════════════════════════════════
 with tab3:
     st.markdown('<div class="section-header">👥 DESEMPEÑO DE PERSONAL</div>', unsafe_allow_html=True)
 
@@ -898,47 +1127,15 @@ with tab3:
     with col1:
         anio_p = st.selectbox("📅 Año", options=list(range(2024, 2031)), index=list(range(2024, 2031)).index(date.today().year), key="anio_personal")
     with col2:
-        mes_p = st.selectbox("📆 Mes", meses_lista if 'meses_lista' in dir() else ["Todos", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-                          "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"], key="mes_personal")
+        mes_p = st.selectbox("📆 Mes", MESES_LISTA, key="mes_personal")
+
+    mes_num_p = MESES_LISTA.index(mes_p) if mes_p != "Todos" else None
 
     try:
-        cursor = conn.cursor(dictionary=True)
-
-        meses_lista_local = ["Todos", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-                              "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-
-        query = """
-            SELECT
-                p.codigo, p.nombre_completo, p.tipo_personal,
-                COUNT(DISTINCT op.orden_id) as ordenes_trabajadas,
-                SUM(op.cantidad_asignada) as items_asignados,
-                SUM(op.cantidad_entregada) as items_entregados,
-                SUM(op.cantidad_devolucion) as items_devueltos,
-                SUM(op.total_pagar) as ingresos_generados,
-                CASE
-                    WHEN SUM(op.cantidad_asignada) > 0
-                    THEN (SUM(op.cantidad_entregada) / SUM(op.cantidad_asignada) * 100)
-                    ELSE 0
-                END as tasa_exito
-            FROM personal p
-            LEFT JOIN orden_personal op ON p.id = op.personal_id
-            WHERE YEAR(op.fecha_asignacion) = %s
-        """
-
-        params = [anio_p]
-
-        if mes_p != "Todos":
-            mes_num_p = meses_lista_local.index(mes_p)
-            query += " AND MONTH(op.fecha_asignacion) = %s"
-            params.append(mes_num_p)
-
-        query += " GROUP BY p.id, p.codigo, p.nombre_completo, p.tipo_personal HAVING ordenes_trabajadas > 0 ORDER BY items_entregados DESC"
-
-        cursor.execute(query, tuple(params))
-        personal_stats = cursor.fetchall()
+        with st.spinner("Cargando desempeño..."):
+            personal_stats = _q_tab3(anio_p, mes_num_p)
 
         if personal_stats:
-            # Métricas generales
             col1, col2, col3, col4 = st.columns(4)
 
             with col1:
@@ -954,8 +1151,6 @@ with tab3:
                 st.metric("💰 Total Generado", f"${total_generado:,.0f}")
 
             st.markdown("---")
-
-            # Ranking
             st.markdown("### 🏆 Ranking de Desempeño")
 
             for i, persona in enumerate(personal_stats[:10], 1):
@@ -988,13 +1183,13 @@ with tab3:
     except Exception as e:
         st.error(f"Error: {e}")
 
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 4 — Detalle por Orden
+# ══════════════════════════════════════════════════════════════════════════════
 with tab4:
     st.markdown('<div class="section-header">📋 DETALLE DE RENTABILIDAD POR ORDEN</div>', unsafe_allow_html=True)
 
     try:
-        cursor = conn.cursor(dictionary=True)
-
-        # Filtros
         col1, col2, col3 = st.columns([1, 1, 2])
 
         with col1:
@@ -1010,14 +1205,7 @@ with tab4:
                 key="fecha_hasta_detalle"
             )
         with col3:
-            # Obtener clientes
-            cursor.execute("""
-                SELECT DISTINCT c.id, c.nombre_empresa
-                FROM clientes c
-                JOIN ordenes o ON c.id = o.cliente_id
-                ORDER BY c.nombre_empresa
-            """)
-            clientes_list = cursor.fetchall()
+            clientes_list = _q_tab4_clientes()
             cliente_options = {"TODOS": None}
             for c in clientes_list:
                 cliente_options[c['nombre_empresa']] = c['id']
@@ -1031,46 +1219,13 @@ with tab4:
 
         st.markdown("---")
 
-        # Query principal de órdenes
-        query_ordenes = """
-            SELECT
-                o.numero_orden,
-                c.nombre_empresa as cliente,
-                o.fecha_recepcion,
-                o.cantidad_total as items,
-                o.valor_total as total_vendido,
-                o.estado
-            FROM ordenes o
-            JOIN clientes c ON o.cliente_id = c.id
-            WHERE o.fecha_recepcion BETWEEN %s AND %s
-        """
-        params = [fecha_desde_det, fecha_hasta_det]
+        with st.spinner("Cargando detalle..."):
+            det = _q_tab4_detalle(fecha_desde_det, fecha_hasta_det, cliente_id_filtro)
 
-        if cliente_id_filtro:
-            query_ordenes += " AND o.cliente_id = %s"
-            params.append(cliente_id_filtro)
-
-        query_ordenes += " ORDER BY c.nombre_empresa, o.fecha_recepcion DESC"
-
-        cursor.execute(query_ordenes, tuple(params))
-        ordenes_result = cursor.fetchall()
+        ordenes_result = det['ordenes']
+        costos_msg_result = det['costos_msg']
 
         if ordenes_result:
-            # Costos de mensajeros por orden — solo entregas/devoluciones, NO alistamiento
-            # El alistamiento se toma de registro_horas + registro_labores (6_Registro_Labores)
-            query_costos_msg = """
-                SELECT
-                    orden,
-                    UPPER(TRIM(cliente)) as cliente,
-                    SUM(valor_total) as costo_mensajeros
-                FROM gestiones_mensajero
-                WHERE fecha_registro BETWEEN %s AND %s
-                GROUP BY orden, UPPER(TRIM(cliente))
-            """
-            cursor.execute(query_costos_msg, (fecha_desde_det, fecha_hasta_det))
-            costos_msg_result = cursor.fetchall()
-
-            # Crear diccionario de costos por orden
             costos_por_orden = {}
             for r in costos_msg_result:
                 orden_key = str(r['orden']).strip()
@@ -1080,14 +1235,8 @@ with tab4:
                     'costo_mensajeros': float(r['costo_mensajeros'] or 0),
                 }
 
-            # Procesar datos
             datos_tabla = []
-            totales = {
-                'items': 0,
-                'vendido': 0,
-                'costo_msg': 0,
-                'utilidad': 0
-            }
+            totales = {'items': 0, 'vendido': 0, 'costo_msg': 0, 'utilidad': 0}
 
             for orden in ordenes_result:
                 num_orden = str(orden['numero_orden']).strip()
@@ -1119,7 +1268,6 @@ with tab4:
                 totales['costo_msg'] += costo_msg
                 totales['utilidad'] += utilidad
 
-            # Métricas resumen
             col1, col2, col3, col4, col5 = st.columns(5)
 
             with col1:
@@ -1134,20 +1282,16 @@ with tab4:
 
             st.markdown("---")
 
-            # Tabla detallada
             df_detalle = pd.DataFrame(datos_tabla)
 
-            # Formatear columnas numéricas para mostrar
             df_display = df_detalle.copy()
             df_display['Vendido'] = df_display['Vendido'].apply(lambda x: f"${x:,.0f}")
             df_display['Costo Msg'] = df_display['Costo Msg'].apply(lambda x: f"${x:,.0f}")
-            df_display['Costo Alist'] = df_display['Costo Alist'].apply(lambda x: f"${x:,.0f}")
             df_display['Utilidad'] = df_display['Utilidad'].apply(lambda x: f"${x:,.0f}")
             df_display['Margen %'] = df_display['Margen %'].apply(lambda x: f"{x:.1f}%")
 
             st.dataframe(df_display, use_container_width=True, hide_index=True)
 
-            # Botón para descargar
             csv = df_detalle.to_csv(index=False)
             st.download_button(
                 label="📥 Descargar CSV",
@@ -1156,7 +1300,6 @@ with tab4:
                 mime="text/csv"
             )
 
-            # Resumen por cliente
             st.markdown("---")
             st.markdown("### 📊 Resumen por Cliente")
 
@@ -1165,21 +1308,18 @@ with tab4:
                 'Items': 'sum',
                 'Vendido': 'sum',
                 'Costo Msg': 'sum',
-                'Costo Alist': 'sum',
                 'Utilidad': 'sum'
             }).reset_index()
 
-            df_resumen.columns = ['Cliente', 'Órdenes', 'Items', 'Vendido', 'Costo Msg', 'Costo Alist', 'Utilidad']
+            df_resumen.columns = ['Cliente', 'Órdenes', 'Items', 'Vendido', 'Costo Msg', 'Utilidad']
             df_resumen['Margen %'] = df_resumen.apply(
                 lambda r: (r['Utilidad'] / r['Vendido'] * 100) if r['Vendido'] > 0 else 0, axis=1
             )
             df_resumen = df_resumen.sort_values('Utilidad', ascending=False)
 
-            # Formatear para mostrar
             df_resumen_display = df_resumen.copy()
             df_resumen_display['Vendido'] = df_resumen_display['Vendido'].apply(lambda x: f"${x:,.0f}")
             df_resumen_display['Costo Msg'] = df_resumen_display['Costo Msg'].apply(lambda x: f"${x:,.0f}")
-            df_resumen_display['Costo Alist'] = df_resumen_display['Costo Alist'].apply(lambda x: f"${x:,.0f}")
             df_resumen_display['Utilidad'] = df_resumen_display['Utilidad'].apply(lambda x: f"${x:,.0f}")
             df_resumen_display['Margen %'] = df_resumen_display['Margen %'].apply(lambda x: f"{x:.1f}%")
 
@@ -1193,13 +1333,11 @@ with tab4:
         import traceback
         st.code(traceback.format_exc())
 
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 5 — Comparativo Mensual
+# ══════════════════════════════════════════════════════════════════════════════
 with tab5:
     st.markdown('<div class="section-header">📈 COMPARATIVO MENSUAL</div>', unsafe_allow_html=True)
-
-    MESES_NOMBRES = {
-        1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr", 5: "May", 6: "Jun",
-        7: "Jul", 8: "Ago", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic"
-    }
 
     anio_comp = st.selectbox(
         "📅 Año a comparar",
@@ -1209,119 +1347,20 @@ with tab5:
     )
 
     try:
-        cursor = conn.cursor(dictionary=True)
+        with st.spinner("Calculando comparativo mensual..."):
+            t5 = _q_tab5(anio_comp)
 
-        # ── 1. Ingresos por mes (sin costo_total de ordenes — duplica costos reales) ──
-        cursor.execute("""
-            SELECT
-                MONTH(o.fecha_recepcion) as mes,
-                SUM(o.valor_total) as ingresos,
-                SUM(o.cantidad_total) as items_totales
-            FROM ordenes o
-            WHERE YEAR(o.fecha_recepcion) = %s
-            GROUP BY MONTH(o.fecha_recepcion)
-            ORDER BY mes
-        """, (anio_comp,))
-        datos_mensuales = cursor.fetchall()
-
-        # ── 2. Costos de mensajeros por mes (por fecha de gestión) ──
-        cursor.execute("""
-            SELECT
-                MONTH(gm.fecha_escaner) as mes,
-                SUM(gm.valor_total) as costo_mensajeros
-            FROM gestiones_mensajero gm
-            JOIN ordenes o ON TRIM(REPLACE(gm.orden, '.0', '')) = TRIM(REPLACE(o.numero_orden, '.0', ''))
-            WHERE YEAR(gm.fecha_escaner) = %s
-            GROUP BY MONTH(gm.fecha_escaner)
-            ORDER BY mes
-        """, (anio_comp,))
-        costos_msg_mes = {r['mes']: float(r['costo_mensajeros'] or 0) for r in cursor.fetchall()}
-
-        # ── 2b. Alistamiento por mes (registro_horas + registro_labores + subsidio_transporte) ──
-        cursor.execute("""
-            SELECT mes, SUM(total) as total_alistamiento FROM (
-                SELECT MONTH(fecha) as mes, total FROM registro_horas WHERE YEAR(fecha) = %s
-                UNION ALL
-                SELECT MONTH(fecha) as mes, total FROM registro_labores WHERE YEAR(fecha) = %s
-                UNION ALL
-                SELECT MONTH(fecha) as mes, total FROM subsidio_transporte WHERE YEAR(fecha) = %s
-            ) t GROUP BY mes ORDER BY mes
-        """, (anio_comp, anio_comp, anio_comp))
-        alistamiento_mes = {r['mes']: float(r['total_alistamiento'] or 0) for r in cursor.fetchall()}
-
-        # ── 3. Costos de transporte por mes ──
-        cursor.execute("""
-            SELECT
-                MONTH(ft.fecha_factura) as mes,
-                SUM(dft.costo_asignado) as costo_transporte
-            FROM detalle_facturas_transporte dft
-            JOIN facturas_transporte ft ON dft.factura_id = ft.id
-            WHERE YEAR(ft.fecha_factura) = %s AND ft.estado != 'anulada'
-            GROUP BY MONTH(ft.fecha_factura)
-            ORDER BY mes
-        """, (anio_comp,))
-        costos_transp_mes = {r['mes']: float(r['costo_transporte'] or 0) for r in cursor.fetchall()}
-
-        # ── 4. Gastos administrativos por mes ──
-        cursor.execute("""
-            SELECT MONTH(fecha) as mes, SUM(monto) as total_gastos
-            FROM gastos_administrativos
-            WHERE YEAR(fecha) = %s
-            GROUP BY MONTH(fecha)
-            ORDER BY mes
-        """, (anio_comp,))
-        gastos_admin_mes = {r['mes']: float(r['total_gastos'] or 0) for r in cursor.fetchall()}
-
-        # ── 5. Nómina por mes ──
-        cursor.execute("""
-            SELECT periodo_mes as mes, SUM(costo_total_empleado) as total_nomina
-            FROM nomina_provisiones
-            WHERE periodo_anio = %s
-            GROUP BY periodo_mes
-            ORDER BY mes
-        """, (anio_comp,))
-        nomina_mes = {r['mes']: float(r['total_nomina'] or 0) for r in cursor.fetchall()}
-
-        # ── 6. Entregas y devoluciones por mes ──
-        cursor.execute("""
-            SELECT
-                MONTH(o.fecha_recepcion) as mes,
-                SUM(CASE WHEN gm.tipo_gestion LIKE '%%Entrega%%' THEN gm.total_seriales ELSE 0 END) as entregados,
-                SUM(CASE WHEN gm.tipo_gestion NOT LIKE '%%Entrega%%' THEN gm.total_seriales ELSE 0 END) as devoluciones
-            FROM gestiones_mensajero gm
-            JOIN ordenes o ON TRIM(REPLACE(gm.orden, '.0', '')) = TRIM(REPLACE(o.numero_orden, '.0', ''))
-            WHERE YEAR(o.fecha_recepcion) = %s
-            GROUP BY MONTH(o.fecha_recepcion)
-            ORDER BY mes
-        """, (anio_comp,))
-        gestiones_mes = {r['mes']: {'entregados': int(r['entregados'] or 0), 'devoluciones': int(r['devoluciones'] or 0)} for r in cursor.fetchall()}
-
-        # ── 7. Ingresos por cliente por mes ──
-        cursor.execute("""
-            SELECT
-                MONTH(o.fecha_recepcion) as mes,
-                UPPER(TRIM(c.nombre_empresa)) as cliente,
-                SUM(o.valor_total) as ingresos
-            FROM ordenes o
-            JOIN clientes c ON o.cliente_id = c.id
-            WHERE YEAR(o.fecha_recepcion) = %s
-            GROUP BY MONTH(o.fecha_recepcion), UPPER(TRIM(c.nombre_empresa))
-            ORDER BY mes
-        """, (anio_comp,))
-        ingresos_cliente_mes = cursor.fetchall()
-
-        # ── 8. Gastos admin por categoría por mes ──
-        cursor.execute("""
-            SELECT MONTH(fecha) as mes, categoria, SUM(monto) as total
-            FROM gastos_administrativos
-            WHERE YEAR(fecha) = %s
-            GROUP BY MONTH(fecha), categoria
-            ORDER BY mes
-        """, (anio_comp,))
-        gastos_cat_mes = cursor.fetchall()
+        datos_mensuales = t5['datos_mensuales']
+        costos_msg_mes = t5['costos_msg_mes']
+        alistamiento_mes = t5['alistamiento_mes']
+        costos_transp_mes = t5['costos_transp_mes']
+        gastos_admin_mes = t5['gastos_admin_mes']
+        nomina_mes = t5['nomina_mes']
+        gestiones_mes = t5['gestiones_mes']
+        ingresos_cliente_mes = t5['ingresos_cliente_mes']
+        gastos_cat_mes = t5['gastos_cat_mes']
 
         if datos_mensuales:
-            # Construir DataFrame principal
             filas = []
             for r in datos_mensuales:
                 m = r['mes']
@@ -1358,9 +1397,6 @@ with tab5:
             df_comp = pd.DataFrame(filas)
             orden_meses = [MESES_NOMBRES[m] for m in sorted(df_comp['mes'].unique())]
 
-            # ════════════════════════════════════════════
-            # GRÁFICA 1: Ingresos vs Utilidad Bruta vs Utilidad Neta
-            # ════════════════════════════════════════════
             st.markdown("### 💵 Ingresos y Utilidad por Mes")
 
             df_ing = df_comp[['mes_nombre', 'ingresos', 'utilidad_bruta', 'utilidad_neta']].melt(
@@ -1390,7 +1426,6 @@ with tab5:
 
             st.altair_chart(chart_ingresos, use_container_width=True)
 
-            # Tabla resumen debajo
             with st.expander("Ver tabla de datos"):
                 df_tabla_ing = df_comp[['mes_nombre', 'ingresos', 'utilidad_bruta', 'utilidad_neta', 'margen_bruto', 'margen_neto']].copy()
                 df_tabla_ing.columns = ['Mes', 'Ingresos', 'Utilidad Bruta', 'Utilidad Neta', 'Margen Bruto %', 'Margen Neto %']
@@ -1403,10 +1438,6 @@ with tab5:
                 st.dataframe(df_show, use_container_width=True, hide_index=True)
 
             st.markdown("---")
-
-            # ════════════════════════════════════════════
-            # GRÁFICA 2: Desglose de Costos por Mes
-            # ════════════════════════════════════════════
             st.markdown("### 💸 Desglose de Costos por Mes")
 
             df_costos_m = df_comp[['mes_nombre', 'costo_mensajeros', 'costo_alistamiento', 'costo_transporte', 'gastos_admin', 'nomina']].melt(
@@ -1438,10 +1469,6 @@ with tab5:
             st.altair_chart(chart_costos, use_container_width=True)
 
             st.markdown("---")
-
-            # ════════════════════════════════════════════
-            # GRÁFICA 3: Entregas vs Devoluciones por Mes
-            # ════════════════════════════════════════════
             st.markdown("### 📦 Entregas vs Devoluciones por Mes")
 
             df_gest = df_comp[['mes_nombre', 'entregados', 'devoluciones']].melt(
@@ -1464,7 +1491,6 @@ with tab5:
                 ]
             ).properties(height=400)
 
-            # Línea de tasa de éxito
             df_tasa = df_comp[['mes_nombre', 'entregados', 'devoluciones']].copy()
             df_tasa['tasa_exito'] = df_tasa.apply(
                 lambda r: (r['entregados'] / (r['entregados'] + r['devoluciones']) * 100)
@@ -1473,7 +1499,6 @@ with tab5:
 
             st.altair_chart(chart_gestiones, use_container_width=True)
 
-            # Tasa de éxito como línea separada
             chart_tasa = alt.Chart(df_tasa).mark_line(
                 point=True, color='#667eea', strokeWidth=3
             ).encode(
@@ -1489,10 +1514,6 @@ with tab5:
             st.altair_chart(chart_tasa, use_container_width=True)
 
             st.markdown("---")
-
-            # ════════════════════════════════════════════
-            # GRÁFICA 4: Margen de Utilidad por Mes
-            # ════════════════════════════════════════════
             st.markdown("### 📊 Márgenes de Utilidad por Mes")
 
             df_margen = df_comp[['mes_nombre', 'margen_bruto', 'margen_neto']].melt(
@@ -1515,7 +1536,6 @@ with tab5:
                 ]
             ).properties(height=350)
 
-            # Línea de referencia en 0%
             linea_cero = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(
                 color='red', strokeDash=[4, 4]
             ).encode(y='y:Q')
@@ -1523,10 +1543,6 @@ with tab5:
             st.altair_chart(chart_margen + linea_cero, use_container_width=True)
 
             st.markdown("---")
-
-            # ════════════════════════════════════════════
-            # GRÁFICA 5: Ingresos por Cliente por Mes
-            # ════════════════════════════════════════════
             st.markdown("### 👥 Ingresos por Cliente por Mes")
 
             if ingresos_cliente_mes:
@@ -1548,22 +1564,9 @@ with tab5:
                 st.altair_chart(chart_clientes, use_container_width=True)
 
             st.markdown("---")
-
-            # ════════════════════════════════════════════
-            # GRÁFICA 6: Gastos Administrativos por Categoría por Mes
-            # ════════════════════════════════════════════
             st.markdown("### 🏢 Gastos Administrativos por Categoría por Mes")
 
             if gastos_cat_mes:
-                CATEGORIAS_NOMBRES = {
-                    'mantenimiento': 'Mantenimiento', 'polizas': 'Pólizas',
-                    'servicios_publicos': 'Serv. Públicos', 'caja_menor': 'Caja Menor',
-                    'papeleria': 'Papelería', 'aseo': 'Aseo', 'internet': 'Internet',
-                    'software': 'Software', 'alquiler_equipos': 'Alq. Equipos',
-                    'arriendo': 'Arriendo', 'honorarios': 'Honorarios',
-                    'impuestos': 'Impuestos', 'otros': 'Otros'
-                }
-
                 df_gcat = pd.DataFrame(gastos_cat_mes)
                 df_gcat['mes_nombre'] = df_gcat['mes'].map(MESES_NOMBRES)
                 df_gcat['total'] = df_gcat['total'].apply(lambda x: float(x or 0))
@@ -1583,10 +1586,6 @@ with tab5:
                 st.altair_chart(chart_gastos_cat, use_container_width=True)
 
             st.markdown("---")
-
-            # ════════════════════════════════════════════
-            # GRÁFICA 7: Volumen Operativo (Items procesados por mes)
-            # ════════════════════════════════════════════
             st.markdown("### 📦 Volumen Operativo Mensual")
 
             col1, col2 = st.columns(2)
@@ -1606,7 +1605,6 @@ with tab5:
                 st.altair_chart(chart_items, use_container_width=True)
 
             with col2:
-                # Ingreso promedio por item
                 df_comp['ingreso_por_item'] = df_comp.apply(
                     lambda r: r['ingresos'] / r['items'] if r['items'] > 0 else 0, axis=1
                 )
@@ -1632,6 +1630,9 @@ with tab5:
         import traceback
         st.code(traceback.format_exc())
 
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 6 — Cartera y Rentabilidad Real
+# ══════════════════════════════════════════════════════════════════════════════
 with tab6:
     st.markdown('<div class="section-header">💳 CARTERA Y RENTABILIDAD REAL</div>', unsafe_allow_html=True)
 
@@ -1643,80 +1644,25 @@ with tab6:
             key="anio_real"
         )
     with col2_r:
-        meses_lista_r = ["Todos", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-                         "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-        mes_r = st.selectbox("📆 Mes", meses_lista_r, key="mes_real")
+        mes_r = st.selectbox("📆 Mes", MESES_LISTA, key="mes_real")
 
-    mes_num_r = meses_lista_r.index(mes_r) if mes_r != "Todos" else None
+    mes_num_r = MESES_LISTA.index(mes_r) if mes_r != "Todos" else None
 
     try:
-        cursor = conn.cursor(dictionary=True)
+        with st.spinner("Cargando cartera..."):
+            d6 = _q_tab6(anio_r, mes_num_r)
+
+        valor_ordenes_cli = d6['valor_ordenes_cli']
+        facturado_cli = d6['facturado_cli']
+        cobrado_cli = d6['cobrado_cli']
+        estimado_msg = d6['estimado_msg']
+        estimado_alist = d6['estimado_alist']
+        costo_transp_r = d6['costo_transp']
+        gastos_admin_r = d6['gastos_admin']
+        nomina_r = d6['nomina']
 
         st.markdown('<div class="section-header">👥 COBROS POR CLIENTE</div>', unsafe_allow_html=True)
 
-        # Valor de órdenes (estimado base)
-        if mes_num_r:
-            cursor.execute("""
-                SELECT UPPER(TRIM(c.nombre_empresa)) as cliente, SUM(o.valor_total) as valor_ordenes
-                FROM ordenes o JOIN clientes c ON o.cliente_id = c.id
-                WHERE YEAR(o.fecha_recepcion) = %s AND MONTH(o.fecha_recepcion) = %s
-                GROUP BY UPPER(TRIM(c.nombre_empresa))
-            """, (anio_r, mes_num_r))
-        else:
-            cursor.execute("""
-                SELECT UPPER(TRIM(c.nombre_empresa)) as cliente, SUM(o.valor_total) as valor_ordenes
-                FROM ordenes o JOIN clientes c ON o.cliente_id = c.id
-                WHERE YEAR(o.fecha_recepcion) = %s
-                GROUP BY UPPER(TRIM(c.nombre_empresa))
-            """, (anio_r,))
-        valor_ordenes_cli = {r['cliente']: float(r['valor_ordenes'] or 0) for r in cursor.fetchall()}
-
-        # Facturado y saldo por cliente (por periodo de la factura)
-        if mes_num_r:
-            cursor.execute("""
-                SELECT UPPER(TRIM(c.nombre_empresa)) as cliente,
-                       SUM(fe.total) as facturado,
-                       SUM(fe.saldo_pendiente) as saldo_pendiente
-                FROM facturas_emitidas fe JOIN clientes c ON fe.cliente_id = c.id
-                WHERE fe.periodo_anio = %s AND fe.periodo_mes = %s AND fe.estado != 'anulada'
-                GROUP BY UPPER(TRIM(c.nombre_empresa))
-            """, (anio_r, mes_num_r))
-        else:
-            cursor.execute("""
-                SELECT UPPER(TRIM(c.nombre_empresa)) as cliente,
-                       SUM(fe.total) as facturado,
-                       SUM(fe.saldo_pendiente) as saldo_pendiente
-                FROM facturas_emitidas fe JOIN clientes c ON fe.cliente_id = c.id
-                WHERE fe.periodo_anio = %s AND fe.estado != 'anulada'
-                GROUP BY UPPER(TRIM(c.nombre_empresa))
-            """, (anio_r,))
-        facturado_cli = {r['cliente']: {
-            'facturado': float(r['facturado'] or 0),
-            'saldo': float(r['saldo_pendiente'] or 0)
-        } for r in cursor.fetchall()}
-
-        # Cobrado: pagos recibidos sobre facturas del período
-        if mes_num_r:
-            cursor.execute("""
-                SELECT UPPER(TRIM(c.nombre_empresa)) as cliente, SUM(pr.monto) as cobrado
-                FROM pagos_recibidos pr
-                JOIN facturas_emitidas fe ON pr.factura_id = fe.id
-                JOIN clientes c ON fe.cliente_id = c.id
-                WHERE fe.periodo_anio = %s AND fe.periodo_mes = %s AND fe.estado != 'anulada'
-                GROUP BY UPPER(TRIM(c.nombre_empresa))
-            """, (anio_r, mes_num_r))
-        else:
-            cursor.execute("""
-                SELECT UPPER(TRIM(c.nombre_empresa)) as cliente, SUM(pr.monto) as cobrado
-                FROM pagos_recibidos pr
-                JOIN facturas_emitidas fe ON pr.factura_id = fe.id
-                JOIN clientes c ON fe.cliente_id = c.id
-                WHERE fe.periodo_anio = %s AND fe.estado != 'anulada'
-                GROUP BY UPPER(TRIM(c.nombre_empresa))
-            """, (anio_r,))
-        cobrado_cli = {r['cliente']: float(r['cobrado'] or 0) for r in cursor.fetchall()}
-
-        # Construir tabla clientes
         todos_clientes_r = set(valor_ordenes_cli.keys()) | set(facturado_cli.keys()) | set(cobrado_cli.keys())
         filas_cli = []
         for cli in sorted(todos_clientes_r):
@@ -1759,47 +1705,7 @@ with tab6:
             st.info("No hay datos de clientes para el período seleccionado")
 
         st.markdown("---")
-
         st.markdown('<div class="section-header">🏍️ PAGOS A MENSAJEROS</div>', unsafe_allow_html=True)
-
-        if mes_num_r:
-            cursor.execute("""
-                SELECT p.nombre_completo, p.codigo,
-                       COUNT(DISTINCT gm.lot_esc) as planillas,
-                       SUM(gm.total_seriales) as seriales,
-                       SUM(gm.valor_total) as estimado,
-                       SUM(CASE WHEN gm.facturado_liq IS NOT NULL THEN gm.valor_total ELSE 0 END) as en_liq,
-                       SUM(CASE WHEN fr.estado = 'pagada' THEN gm.valor_total ELSE 0 END) as pagado
-                FROM gestiones_mensajero gm
-                JOIN personal p ON CAST(gm.cod_mensajero AS UNSIGNED) = CAST(p.codigo AS UNSIGNED)
-                LEFT JOIN facturas_recibidas fr ON gm.facturado_liq = fr.id
-                WHERE YEAR(gm.fecha_escaner) = %s AND MONTH(gm.fecha_escaner) = %s
-                GROUP BY p.id, p.nombre_completo, p.codigo
-                ORDER BY p.nombre_completo
-            """, (anio_r, mes_num_r))
-        else:
-            cursor.execute("""
-                SELECT p.nombre_completo, p.codigo,
-                       COUNT(DISTINCT gm.lot_esc) as planillas,
-                       SUM(gm.total_seriales) as seriales,
-                       SUM(gm.valor_total) as estimado,
-                       SUM(CASE WHEN gm.facturado_liq IS NOT NULL THEN gm.valor_total ELSE 0 END) as en_liq,
-                       SUM(CASE WHEN fr.estado = 'pagada' THEN gm.valor_total ELSE 0 END) as pagado
-                FROM gestiones_mensajero gm
-                JOIN personal p ON CAST(gm.cod_mensajero AS UNSIGNED) = CAST(p.codigo AS UNSIGNED)
-                LEFT JOIN facturas_recibidas fr ON gm.facturado_liq = fr.id
-                WHERE YEAR(gm.fecha_escaner) = %s
-                GROUP BY p.id, p.nombre_completo, p.codigo
-                ORDER BY p.nombre_completo
-            """, (anio_r,))
-        estimado_msg = {r['codigo']: {
-            'nombre': r['nombre_completo'],
-            'planillas': int(r['planillas'] or 0),
-            'seriales': int(r['seriales'] or 0),
-            'estimado': float(r['estimado'] or 0),
-            'en_liq': float(r['en_liq'] or 0),
-            'pagado': float(r['pagado'] or 0),
-        } for r in cursor.fetchall()}
 
         if estimado_msg:
             filas_msg = []
@@ -1843,44 +1749,7 @@ with tab6:
             st.info("No hay gestiones de mensajeros en el período")
 
         st.markdown("---")
-
         st.markdown('<div class="section-header">🏭 PAGOS DE ALISTAMIENTO</div>', unsafe_allow_html=True)
-
-        if mes_num_r:
-            cursor.execute("""
-                SELECT p.nombre_completo, p.codigo,
-                       SUM(combined.total) as estimado,
-                       SUM(CASE WHEN combined.liquidado = 1 THEN combined.total ELSE 0 END) as pagado
-                FROM (
-                    SELECT personal_id, total, liquidado FROM registro_horas
-                    WHERE YEAR(fecha) = %s AND MONTH(fecha) = %s
-                    UNION ALL
-                    SELECT personal_id, total, liquidado FROM registro_labores
-                    WHERE YEAR(fecha) = %s AND MONTH(fecha) = %s
-                ) combined
-                JOIN personal p ON combined.personal_id = p.id
-                GROUP BY p.id, p.nombre_completo, p.codigo
-                ORDER BY p.nombre_completo
-            """, (anio_r, mes_num_r, anio_r, mes_num_r))
-        else:
-            cursor.execute("""
-                SELECT p.nombre_completo, p.codigo,
-                       SUM(combined.total) as estimado,
-                       SUM(CASE WHEN combined.liquidado = 1 THEN combined.total ELSE 0 END) as pagado
-                FROM (
-                    SELECT personal_id, total, liquidado FROM registro_horas WHERE YEAR(fecha) = %s
-                    UNION ALL
-                    SELECT personal_id, total, liquidado FROM registro_labores WHERE YEAR(fecha) = %s
-                ) combined
-                JOIN personal p ON combined.personal_id = p.id
-                GROUP BY p.id, p.nombre_completo, p.codigo
-                ORDER BY p.nombre_completo
-            """, (anio_r, anio_r))
-        estimado_alist = {r['codigo']: {
-            'nombre': r['nombre_completo'],
-            'estimado': float(r['estimado'] or 0),
-            'pagado': float(r['pagado'] or 0),
-        } for r in cursor.fetchall()}
 
         if estimado_alist:
             filas_alist = []
@@ -1916,67 +1785,17 @@ with tab6:
             st.info("No hay registros de alistamiento en el período")
 
         st.markdown("---")
-
         st.markdown('<div class="section-header">💰 RENTABILIDAD REAL vs. ESTIMADA</div>', unsafe_allow_html=True)
-
-        # Transporte (sin tracking de pagado/pendiente)
-        if mes_num_r:
-            cursor.execute("""
-                SELECT SUM(dft.costo_asignado) as total
-                FROM detalle_facturas_transporte dft
-                JOIN facturas_transporte ft ON dft.factura_id = ft.id
-                WHERE YEAR(ft.fecha_factura) = %s AND MONTH(ft.fecha_factura) = %s
-                AND ft.estado != 'anulada'
-            """, (anio_r, mes_num_r))
-        else:
-            cursor.execute("""
-                SELECT SUM(dft.costo_asignado) as total
-                FROM detalle_facturas_transporte dft
-                JOIN facturas_transporte ft ON dft.factura_id = ft.id
-                WHERE YEAR(ft.fecha_factura) = %s AND ft.estado != 'anulada'
-            """, (anio_r,))
-        r_transp_r = cursor.fetchone()
-        costo_transp_r = float(r_transp_r['total'] or 0) if r_transp_r else 0
-
-        # Gastos admin
-        if mes_num_r:
-            cursor.execute("""
-                SELECT SUM(monto) as total FROM gastos_administrativos
-                WHERE YEAR(fecha) = %s AND MONTH(fecha) = %s
-            """, (anio_r, mes_num_r))
-        else:
-            cursor.execute("""
-                SELECT SUM(monto) as total FROM gastos_administrativos WHERE YEAR(fecha) = %s
-            """, (anio_r,))
-        r_ga_r = cursor.fetchone()
-        gastos_admin_r = float(r_ga_r['total'] or 0) if r_ga_r else 0
-
-        # Nómina
-        if mes_num_r:
-            cursor.execute("""
-                SELECT SUM(costo_total_empleado) as total FROM nomina_provisiones
-                WHERE periodo_anio = %s AND periodo_mes = %s
-            """, (anio_r, mes_num_r))
-        else:
-            cursor.execute("""
-                SELECT SUM(costo_total_empleado) as total FROM nomina_provisiones WHERE periodo_anio = %s
-            """, (anio_r,))
-        r_nom_r = cursor.fetchone()
-        nomina_r = float(r_nom_r['total'] or 0) if r_nom_r else 0
 
         gastos_fijos_r = gastos_admin_r + nomina_r
 
-        # ── Calcular P&L ──
-        # Estimado
         costos_directos_estimados = tot_msg_estimado + tot_alist_estimado + costo_transp_r
         utilidad_estimada = tot_ordenes_r - costos_directos_estimados - gastos_fijos_r
 
-        # Real: facturado a clientes vs pagado a mensajeros/alistamiento
         costos_directos_reales = tot_msg_pagado + tot_alist_pagado + costo_transp_r
         utilidad_real_facturada = tot_facturado_r - costos_directos_reales - gastos_fijos_r
         utilidad_real_cobrada = tot_cobrado_r - costos_directos_reales - gastos_fijos_r
 
-        # Métricas principales
         col1, col2, col3, col4 = st.columns(4)
         with col1:
             st.metric("📋 Valor Órdenes", f"${tot_ordenes_r:,.0f}",
@@ -1995,7 +1814,6 @@ with tab6:
 
         st.markdown("---")
 
-        # Tabla P&L comparativo
         pnl_data = [
             {
                 'Concepto': '💵 Ingresos',
@@ -2063,6 +1881,3 @@ with tab6:
         st.error(f"Error: {e}")
         import traceback
         st.code(traceback.format_exc())
-
-if 'cursor' in locals():
-    cursor.close()

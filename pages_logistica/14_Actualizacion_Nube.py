@@ -384,8 +384,8 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
     tiene_ciudad       = "ciudad1" in df_mayo.columns
 
     cur = conn.cursor()
-    insertados  = 0
-    ordenes_acc = {}   # {numero_orden: {cliente, fecha_recepcion, tipo_servicio, local, nac, valor}}
+    ordenes_acc  = {}   # {numero_orden: {cliente, fecha_recepcion, tipo_servicio, local, nac, valor}}
+    batch_params = []   # acumula todos los params para el INSERT batch al final
 
     for _, row in df_mayo.iterrows():
         try:
@@ -433,25 +433,11 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
             precio_cli_v = precios_cli.get(cliente_key, {}).get(f"{tipo_envio}_{tipo_key}", 0)
             mensajero_id = personal.get(cod_men, {}).get("id", None)
 
-            cur.execute("""
-                INSERT INTO seriales_gestion
-                    (serial, planilla, orden, fecha_escaner, cod_men, mensajero_id,
-                     cliente, tipo_gestion, tipo_envio, precio_cliente, precio_mensajero, origen)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE
-                    planilla         = IF(estado = 'pendiente', VALUES(planilla),         planilla),
-                    orden            = IF(estado = 'pendiente', VALUES(orden),            orden),
-                    fecha_escaner    = IF(estado = 'pendiente', VALUES(fecha_escaner),    fecha_escaner),
-                    cod_men          = IF(estado = 'pendiente', VALUES(cod_men),          cod_men),
-                    mensajero_id     = IF(estado = 'pendiente', VALUES(mensajero_id),     mensajero_id),
-                    tipo_envio       = IF(estado = 'pendiente', VALUES(tipo_envio),       tipo_envio),
-                    precio_cliente   = IF(estado = 'pendiente', VALUES(precio_cliente),   precio_cliente),
-                    precio_mensajero = IF(estado = 'pendiente', VALUES(precio_mensajero), precio_mensajero),
-                    origen           = IF(estado = 'pendiente', VALUES(origen),           origen)
-            """, (serial, planilla, orden_val, fecha_esc, cod_men, mensajero_id,
-                  cliente, tipo_gestion, tipo_envio, precio_cli_v, precio_men_v, origen))
-            if cur.rowcount > 0:
-                insertados += 1
+            # Acumular parámetros — el INSERT se ejecuta en batch al salir del loop
+            batch_params.append((
+                serial, planilla, orden_val, fecha_esc, cod_men, mensajero_id,
+                cliente, tipo_gestion, tipo_envio, precio_cli_v, precio_men_v, origen,
+            ))
 
             # Acumular datos para sincronizar ordenes
             if orden_val:
@@ -476,6 +462,29 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
         except Exception:
             pass
 
+    # Batch INSERT en chunks de 500 para reducir round-trips sobre el túnel SSH.
+    # executemany() convierte cada chunk en una sola sentencia multi-VALUES,
+    # en lugar de N execute() independientes.
+    _CHUNK = 500
+    _SQL_INSERT = """
+        INSERT INTO seriales_gestion
+            (serial, planilla, orden, fecha_escaner, cod_men, mensajero_id,
+             cliente, tipo_gestion, tipo_envio, precio_cliente, precio_mensajero, origen)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            planilla         = IF(estado = 'pendiente', VALUES(planilla),         planilla),
+            orden            = IF(estado = 'pendiente', VALUES(orden),            orden),
+            fecha_escaner    = IF(estado = 'pendiente', VALUES(fecha_escaner),    fecha_escaner),
+            cod_men          = IF(estado = 'pendiente', VALUES(cod_men),          cod_men),
+            mensajero_id     = IF(estado = 'pendiente', VALUES(mensajero_id),     mensajero_id),
+            tipo_envio       = IF(estado = 'pendiente', VALUES(tipo_envio),       tipo_envio),
+            precio_cliente   = IF(estado = 'pendiente', VALUES(precio_cliente),   precio_cliente),
+            precio_mensajero = IF(estado = 'pendiente', VALUES(precio_mensajero), precio_mensajero),
+            origen           = IF(estado = 'pendiente', VALUES(origen),           origen)
+    """
+    for _i in range(0, len(batch_params), _CHUNK):
+        cur.executemany(_SQL_INSERT, batch_params[_i : _i + _CHUNK])
+
     # Sincronizar ordenes con los datos acumulados
     try:
         dict_clientes = _cargar_clientes_sg(conn)
@@ -485,7 +494,7 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
 
     conn.commit()
     cur.close()
-    return insertados
+    return len(batch_params)
 
 
 # ---------------------------------------------------------------------------
@@ -882,20 +891,28 @@ with st.expander(
                             ] = otro
 
                     # Registrar seriales individuales en seriales_gestion para mayo 2026+
+                    # Se hace batch insert (executemany en chunks de 500) para no
+                    # saturar el túnel SSH con miles de round-trips individuales.
                     try:
                         conn_sg_histo = _conectar_logistica()
                         if conn_sg_histo:
-                            _insertar_seriales_gestion_nube(
-                                df_ag,
-                                conn_sg_histo,
-                                _cargar_precios_mensajero_sg(conn_sg_histo),
-                                _cargar_precios_cliente_sg(conn_sg_histo),
-                                _cargar_personal_sg(conn_sg_histo),
-                                "scanner",
-                            )
+                            with st.spinner(
+                                f"Registrando seriales mayo 2026+ en seriales_gestion "
+                                f"({len(df_ag):,} filas)…"
+                            ):
+                                n_sg = _insertar_seriales_gestion_nube(
+                                    df_ag,
+                                    conn_sg_histo,
+                                    _cargar_precios_mensajero_sg(conn_sg_histo),
+                                    _cargar_precios_cliente_sg(conn_sg_histo),
+                                    _cargar_personal_sg(conn_sg_histo),
+                                    "scanner",
+                                )
                             conn_sg_histo.close()
-                    except Exception:
-                        pass
+                            if n_sg:
+                                st.caption(f"↳ {n_sg:,} seriales de escáner procesados en seriales_gestion")
+                    except Exception as _exc_sg:
+                        st.warning(f"⚠️ seriales_gestion (scanner): {_exc_sg}")
 
                     # Agrupar y contar seriales por combinación de escáner
                     cols_grp = ["f_esc", "cod_men", "lot_esc", "orden", "mot_esc", "no_entidad"]
@@ -970,17 +987,23 @@ with st.expander(
                                 df_imile_ser["serial"] = df_imile_ser["serial"].astype(str)
                                 conn_sg_im = _conectar_logistica()
                                 if conn_sg_im:
-                                    _insertar_seriales_gestion_nube(
-                                        df_imile_ser,
-                                        conn_sg_im,
-                                        _cargar_precios_mensajero_sg(conn_sg_im),
-                                        _cargar_precios_cliente_sg(conn_sg_im),
-                                        _cargar_personal_sg(conn_sg_im),
-                                        "imile",
-                                    )
+                                    with st.spinner(
+                                        f"Registrando seriales iMile mayo 2026+ "
+                                        f"({len(df_imile_ser):,} filas)…"
+                                    ):
+                                        n_sg_im = _insertar_seriales_gestion_nube(
+                                            df_imile_ser,
+                                            conn_sg_im,
+                                            _cargar_precios_mensajero_sg(conn_sg_im),
+                                            _cargar_precios_cliente_sg(conn_sg_im),
+                                            _cargar_personal_sg(conn_sg_im),
+                                            "imile",
+                                        )
                                     conn_sg_im.close()
-                            except Exception:
-                                pass
+                                    if n_sg_im:
+                                        st.caption(f"↳ {n_sg_im:,} seriales iMile procesados en seriales_gestion")
+                            except Exception as _exc_sg_im:
+                                st.warning(f"⚠️ seriales_gestion (iMile): {_exc_sg_im}")
 
                             cols_grp_paq = [
                                 "f_esc", "cod_men", "lot_esc",
