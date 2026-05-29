@@ -2815,10 +2815,12 @@ if _seccion == "🏙️ Facturación Ciudades":
                 _pc1, _pc2, _pc3 = st.columns([1, 11, 2])
                 with _pc1:
                     if _pp['bloqueada']:
-                        st.checkbox("", value=False, disabled=True, key=f'fc_chk_{_pi}')
+                        st.checkbox("s", value=False, disabled=True, key=f'fc_chk_{_pi}',
+                                    label_visibility="collapsed")
                         _fc_any_blocked = True
                     else:
-                        if st.checkbox("", key=f'fc_chk_{_pi}'):
+                        if st.checkbox("s", key=f'fc_chk_{_pi}',
+                                       label_visibility="collapsed"):
                             _fc_selected.append(_pp)
                 with _pc2:
                     _fe = _pp['fecha_escaner']
