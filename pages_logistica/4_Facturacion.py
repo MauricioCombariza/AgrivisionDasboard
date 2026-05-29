@@ -2579,8 +2579,7 @@ if _seccion == "🏙️ Facturación Ciudades":
             except Exception:
                 rows_gm = []
 
-            # Para cada planilla, clasificar seriales via histo+ciudad_tipo
-            conn_bw = _conectar_bases_web_fc()
+            # Construir dict de planillas primero
             for r in rows_gm:
                 pl = str(r['planilla'])
                 if pl not in planillas:
@@ -2597,35 +2596,43 @@ if _seccion == "🏙️ Facturación Ciudades":
                         '_precio_guardado': float(r.get('precio_guardado') or 0),
                         '_max_precio_editado': r.get('max_precio_editado'),
                     }
-                if conn_bw:
-                    try:
-                        _ch = conn_bw.cursor(dictionary=True)
-                        # Sin filtro cod_men: la planilla identifica todos los seriales
-                        # en histo independientemente de reasignaciones en gestiones.
-                        _ch.execute("""
-                            SELECT COALESCE(NULLIF(TRIM(ciudad1),''), 'Sin ciudad') AS ciudad,
-                                   COUNT(*) AS cnt
-                            FROM histo
-                            WHERE (planilla = %s OR lot_esc = %s)
-                            GROUP BY ciudad
-                        """, (pl, pl))
-                        rows_h = _ch.fetchall()
-                        _ch.close()
-                        for rh in rows_h:
+
+            # Una sola query batch a bases_web en lugar de N queries individuales
+            conn_bw = _conectar_bases_web_fc()
+            if conn_bw and planillas:
+                try:
+                    _all_ids = list(planillas.keys())
+                    _ph = ','.join(['%s'] * len(_all_ids))
+                    _ch = conn_bw.cursor(dictionary=True)
+                    _ch.execute(f"""
+                        SELECT
+                            CASE WHEN TRIM(planilla) IN ({_ph}) THEN TRIM(planilla)
+                                 ELSE TRIM(lot_esc)
+                            END AS match_key,
+                            COALESCE(NULLIF(TRIM(ciudad1),''), 'Sin ciudad') AS ciudad,
+                            COUNT(*) AS cnt
+                        FROM histo
+                        WHERE TRIM(planilla) IN ({_ph}) OR TRIM(lot_esc) IN ({_ph})
+                        GROUP BY match_key, ciudad
+                    """, _all_ids * 3)
+                    for rh in _ch.fetchall():
+                        pl_match = (rh['match_key'] or '').strip()
+                        if pl_match in planillas:
                             city_key = (rh['ciudad'] or '').lower().strip()
                             tipo = ciudad_map.get(city_key, 'nacional')
                             if tipo == 'local':
-                                planillas[pl]['cantidad_local'] += int(rh['cnt'])
+                                planillas[pl_match]['cantidad_local'] += int(rh['cnt'])
                             else:
-                                planillas[pl]['cantidad_nacional'] += int(rh['cnt'])
-                        planillas[pl]['_histo_ok'] = True
-                    except Exception:
-                        pass
-            if conn_bw:
-                try:
-                    conn_bw.close()
+                                planillas[pl_match]['cantidad_nacional'] += int(rh['cnt'])
+                            planillas[pl_match]['_histo_ok'] = True
+                    _ch.close()
                 except Exception:
                     pass
+                finally:
+                    try:
+                        conn_bw.close()
+                    except Exception:
+                        pass
 
         # ── Mayo+: seriales_gestion ───────────────────────────────────────────
         if hasta >= _CORTE_SG_FC:
