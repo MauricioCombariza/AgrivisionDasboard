@@ -2783,6 +2783,9 @@ if _seccion == "🏙️ Facturación Ciudades":
 
     # ── Sub-tab 1: Selección de planillas → generar prefactura ────────────────
     with fc_stab1:
+        if 'fc_pref_ok' in st.session_state:
+            st.success(st.session_state.pop('fc_pref_ok'))
+
         st.markdown("#### Seleccionar planillas para prefactura")
 
         _fc_col1, _fc_col2, _fc_col3 = st.columns([2, 1, 1])
@@ -2942,8 +2945,13 @@ if _seccion == "🏙️ Facturación Ciudades":
                             ))
                         conn.commit()
                         _c.close()
-                        st.success(f"✅ Prefactura #{_pref_id} generada exitosamente")
+                        st.session_state['fc_pref_ok'] = (
+                            f"✅ Prefactura #{_pref_id} generada — "
+                            f"{len(_fc_selected)} planilla(s) · ${_fc_tot_v:,.0f}"
+                        )
                         st.session_state.pop('fc_planillas', None)
+                        for _ki in range(len(_fc_plist)):
+                            st.session_state.pop(f'fc_chk_{_ki}', None)
                         st.rerun()
                     except Exception as _e:
                         conn.rollback()
