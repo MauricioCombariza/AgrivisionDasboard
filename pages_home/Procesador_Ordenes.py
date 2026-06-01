@@ -208,8 +208,7 @@ def _insertar_seriales_gestion_proc(df_seriales, conn, precios_men, precios_cli,
     else:
         _fecha_corte = pd.Series('', index=df_seriales.index)
     df_may = df_seriales[
-        (_fecha_corte >= '2026.05.01') &
-        (df_seriales['estado_item'].isin(['Entregado', 'Devolución']))
+        _fecha_corte >= '2026.05.01'
     ].copy() if not df_seriales.empty else pd.DataFrame()
 
     if df_may.empty:
@@ -227,7 +226,16 @@ def _insertar_seriales_gestion_proc(df_seriales, conn, precios_men, precios_cli,
     for _, row in df_may.iterrows():
         try:
             serial    = str(row['serial']).strip()
-            fecha_esc = str(row.get('f_esc', '')).replace('.', '-')
+            # fecha_escaner: f_esc si es válido (AAAA.MM.DD), f_emi como placeholder si no.
+            _fesc_raw   = str(row.get('f_esc', '') or '').strip()
+            _fesc_valid = (len(_fesc_raw) == 10 and _fesc_raw[4:5] == '.' and _fesc_raw[7:8] == '.')
+            if _fesc_valid:
+                fecha_esc = _fesc_raw.replace('.', '-')
+            else:
+                _femi_raw = str(row.get('f_emi', '') or '').strip()
+                fecha_esc = _femi_raw.replace('.', '-') if _femi_raw else ''
+                if not fecha_esc:
+                    continue
             lot_raw = str(row.get('lot_esc', '')).strip()
             try:
                 lot_int = str(int(float(lot_raw))) if lot_raw else ""
@@ -239,10 +247,12 @@ def _insertar_seriales_gestion_proc(df_seriales, conn, precios_men, precios_cli,
                 orden_val = ord_str if ord_str and ord_str != "0" else ""
             else:
                 orden_val = ""
-            cod_men      = str(row.get('cod_men', '')).zfill(4)
+            cod_men_raw  = str(row.get('cod_men', '') or '').strip()
+            cod_men      = cod_men_raw.zfill(4) if _fesc_valid else '0000'
+            planilla     = planilla if _fesc_valid else ''
             cliente      = str(row.get('no_entidad', '')).strip()
-            estado_it    = str(row['estado_item'])
-            tipo_gestion = 'Entrega' if estado_it == 'Entregado' else 'Devolucion'
+            estado_it    = str(row.get('estado_item', '') or '')
+            tipo_gestion = 'Devolucion' if estado_it == 'Devolución' else 'Entrega'
             tipo_key     = tipo_gestion.lower()
             cliente_key  = cliente.upper().strip()
 
