@@ -23,7 +23,8 @@ if not os.path.exists(VPS_KEY):
         VPS_KEY = _alt
 
 LOCAL_USER = "root"
-LOCAL_PASS = ""
+LOCAL_PASS = os.environ.get("DB_PASSWORD_LOCAL", os.environ.get("DB_PASSWORD", ""))
+LOCAL_PORT = int(os.environ.get("DB_PORT_LOCAL", "3306"))
 
 VPS_DB_USER = "root"
 VPS_DB_PASS = "Root2024!"
@@ -76,12 +77,21 @@ def sincronizar_tabla(db, tabla, ssh_client, sftp, progreso_placeholder, log):
         with tempfile.NamedTemporaryFile(suffix=".sql", delete=False) as f:
             ruta_sql = f.name
 
-        cmd_dump = ["mysqldump", f"-u{LOCAL_USER}"]
-        if LOCAL_PASS:
-            cmd_dump.append(f"-p{LOCAL_PASS}")
-        cmd_dump += ["--single-transaction", "--no-tablespaces", db, tabla]
-
-        resultado = subprocess.run(cmd_dump, capture_output=True, text=True)
+        cmd_dump = [
+            "mysqldump",
+            f"-u{LOCAL_USER}",
+            f"--port={LOCAL_PORT}",
+            "--single-transaction",
+            "--no-tablespaces",
+            db, tabla,
+        ]
+        # Contraseña via variable de entorno para evitar que mysqldump
+        # cuelgue esperando entrada interactiva cuando la contraseña es vacía.
+        env_dump = {**os.environ, "MYSQL_PWD": LOCAL_PASS}
+        resultado = subprocess.run(
+            cmd_dump, capture_output=True, text=True,
+            stdin=subprocess.DEVNULL, env=env_dump,
+        )
         if resultado.returncode != 0:
             log.append(f"❌ Error dumping {db}.{tabla}: {resultado.stderr[:200]}")
             return False
