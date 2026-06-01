@@ -133,6 +133,9 @@ try:
             btn_buscar = st.button("Buscar", key="btn_buscar_planilla", type="primary")
 
         if btn_buscar and numero_planilla_buscar:
+            # Limpiar caché de bases_web para forzar recarga al buscar
+            st.session_state.pop(f"_bw_hdr_{numero_planilla_buscar}", None)
+            st.session_state.pop(f"_bw_city_{numero_planilla_buscar}", None)
             # Forzar nueva transaccion para ver cambios recientes
             conn.commit()
             # Buscar la planilla en la base de datos
@@ -275,72 +278,86 @@ try:
                 _override_cod_men_hdr = [r['cod_men'] for r in _cur_ov_hdr.fetchall()]
                 _cur_ov_hdr.close()
 
-                _conn_bw_hdr = _conectar_bases_web()
-                if _conn_bw_hdr:
-                    try:
-                        _cur_hdr = _conn_bw_hdr.cursor(dictionary=True)
+                _bw_hdr_key = f"_bw_hdr_{num_planilla}"
+                _ciudad_rows_hdr = None
+                if _bw_hdr_key not in st.session_state:
+                    _conn_bw_hdr = _conectar_bases_web()
+                    if _conn_bw_hdr:
+                        try:
+                            _cur_hdr = _conn_bw_hdr.cursor(dictionary=True)
 
-                        # Construir cláusula extra para couriers con planilla vacía en histo.
-                        # Solo se incluyen las órdenes ya registradas en gestiones_mensajero
-                        # para esta planilla, evitando capturar órdenes de otros períodos.
-                        _hdr_base_params = [num_planilla, num_planilla]
-                        _hdr_extra_sql   = ""
-                        if _override_cod_men_hdr:
-                            _ph_ov = ','.join(['%s'] * len(_override_cod_men_hdr))
-                            _cur_ov_ord = conn.cursor(dictionary=True)
-                            _cur_ov_ord.execute(
-                                f"SELECT DISTINCT orden FROM gestiones_mensajero "
-                                f"WHERE lot_esc = %s AND cod_mensajero IN ({_ph_ov}) AND orden IS NOT NULL",
-                                [num_planilla] + _override_cod_men_hdr
-                            )
-                            _override_orders = [str(r['orden']) for r in _cur_ov_ord.fetchall()]
-                            _cur_ov_ord.close()
-                            if _override_orders:
-                                _ph_or = ','.join(['%s'] * len(_override_orders))
-                                _hdr_extra_sql = (
-                                    f" OR (TRIM(cod_men) IN ({_ph_ov})"
-                                    f" AND TRIM(COALESCE(planilla,'')) = ''"
-                                    f" AND CAST(orden AS UNSIGNED) IN ({_ph_or}))"
+                            # Construir cláusula extra para couriers con planilla vacía en histo.
+                            # Solo se incluyen las órdenes ya registradas en gestiones_mensajero
+                            # para esta planilla, evitando capturar órdenes de otros períodos.
+                            _hdr_base_params = [num_planilla, num_planilla]
+                            _hdr_extra_sql   = ""
+                            if _override_cod_men_hdr:
+                                _ph_ov = ','.join(['%s'] * len(_override_cod_men_hdr))
+                                _cur_ov_ord = conn.cursor(dictionary=True)
+                                _cur_ov_ord.execute(
+                                    f"SELECT DISTINCT orden FROM gestiones_mensajero "
+                                    f"WHERE lot_esc = %s AND cod_mensajero IN ({_ph_ov}) AND orden IS NOT NULL",
+                                    [num_planilla] + _override_cod_men_hdr
                                 )
-                                _hdr_base_params += _override_cod_men_hdr + _override_orders
+                                _override_orders = [str(r['orden']) for r in _cur_ov_ord.fetchall()]
+                                _cur_ov_ord.close()
+                                if _override_orders:
+                                    _ph_or = ','.join(['%s'] * len(_override_orders))
+                                    _hdr_extra_sql = (
+                                        f" OR (TRIM(cod_men) IN ({_ph_ov})"
+                                        f" AND TRIM(COALESCE(planilla,'')) = ''"
+                                        f" AND CAST(orden AS UNSIGNED) IN ({_ph_or}))"
+                                    )
+                                    _hdr_base_params += _override_cod_men_hdr + _override_orders
 
-                        _cur_hdr.execute(f"""
-                            SELECT COUNT(*) AS cnt FROM histo
-                            WHERE (planilla = %s OR lot_esc = %s){_hdr_extra_sql}
-                        """, _hdr_base_params)
-                        _r = _cur_hdr.fetchone()
-                        _seriales_histo_hdr = int(_r['cnt']) if _r else None
+                            _cur_hdr.execute(f"""
+                                SELECT COUNT(*) AS cnt FROM histo
+                                WHERE (planilla = %s OR lot_esc = %s){_hdr_extra_sql}
+                            """, _hdr_base_params)
+                            _r = _cur_hdr.fetchone()
+                            _seriales_histo_hdr = int(_r['cnt']) if _r else None
 
-                        # Valor usando clasificaciones guardadas en ciudad_tipo
-                        _cur_hdr.execute(f"""
-                            SELECT
-                                COALESCE(NULLIF(TRIM(h.ciudad1),''),'Sin ciudad') AS ciudad,
-                                COUNT(*) AS cnt,
-                                COALESCE(ct.tipo, 'nacional') AS tipo
-                            FROM histo h
-                            LEFT JOIN ciudad_tipo ct
-                              ON TRIM(h.ciudad1) = ct.ciudad
-                            WHERE (h.planilla = %s OR h.lot_esc = %s){_hdr_extra_sql}
-                            GROUP BY ciudad, tipo
-                        """, _hdr_base_params)
-                        _ciudad_rows_hdr = _cur_hdr.fetchall()
-                        _cur_hdr.close()
-                        _conn_bw_hdr.close()
-                        # Leer tarifa desde session_state si el usuario ya la ingresó
-                        # en los widgets de abajo (disponible en cada re-render).
-                        _p_local_hdr = float(
-                            st.session_state.get(f"tar_local_busq_{_cod_men_key}", precio_local_busq) or 0
-                        )
-                        _p_nac_hdr = float(
-                            st.session_state.get(f"tar_nac_busq_{_cod_men_key}", precio_nacional_busq) or 0
-                        )
-                        if _ciudad_rows_hdr and _p_local_hdr > 0:
-                            _valor_histo_hdr = sum(
-                                r['cnt'] * (_p_local_hdr if r['tipo'] == 'local' else _p_nac_hdr)
-                                for r in _ciudad_rows_hdr
-                            )
-                    except Exception:
-                        pass
+                            # Valor usando clasificaciones guardadas en ciudad_tipo
+                            _cur_hdr.execute(f"""
+                                SELECT
+                                    COALESCE(NULLIF(TRIM(h.ciudad1),''),'Sin ciudad') AS ciudad,
+                                    COUNT(*) AS cnt,
+                                    COALESCE(ct.tipo, 'nacional') AS tipo
+                                FROM histo h
+                                LEFT JOIN ciudad_tipo ct
+                                  ON TRIM(h.ciudad1) = ct.ciudad
+                                WHERE (h.planilla = %s OR h.lot_esc = %s){_hdr_extra_sql}
+                                GROUP BY ciudad, tipo
+                            """, _hdr_base_params)
+                            _ciudad_rows_hdr = _cur_hdr.fetchall()
+                            _cur_hdr.close()
+                            _conn_bw_hdr.close()
+                            st.session_state[_bw_hdr_key] = {
+                                'seriales': _seriales_histo_hdr,
+                                'ciudades': _ciudad_rows_hdr,
+                            }
+                        except Exception:
+                            # Cachear resultado vacío para no reintentar en cada render
+                            st.session_state[_bw_hdr_key] = {'seriales': None, 'ciudades': None}
+                    else:
+                        # Conexión falló — cachear para no bloquear renders siguientes
+                        st.session_state[_bw_hdr_key] = {'seriales': None, 'ciudades': None}
+                else:
+                    _seriales_histo_hdr = st.session_state[_bw_hdr_key]['seriales']
+                    _ciudad_rows_hdr    = st.session_state[_bw_hdr_key]['ciudades']
+
+                # Calcular valor total con tarifas actuales (se recalcula en cada render)
+                _p_local_hdr = float(
+                    st.session_state.get(f"tar_local_busq_{_cod_men_key}", precio_local_busq) or 0
+                )
+                _p_nac_hdr = float(
+                    st.session_state.get(f"tar_nac_busq_{_cod_men_key}", precio_nacional_busq) or 0
+                )
+                if _ciudad_rows_hdr and _p_local_hdr > 0:
+                    _valor_histo_hdr = sum(
+                        r['cnt'] * (_p_local_hdr if r['tipo'] == 'local' else _p_nac_hdr)
+                        for r in _ciudad_rows_hdr
+                    )
 
             # Obtener lista de mensajeros para el selector
             cursor.execute("""
@@ -728,9 +745,17 @@ try:
 
                 # ── Consultar histo: seriales de la planilla agrupados por ciudad1 ──
                 lot_esc_planilla = str(num_planilla)
+                _bw_city_key = f"_bw_city_{num_planilla}"
 
-                conn_bw = _conectar_bases_web()
+                conn_bw = None
                 df_ciudades = pd.DataFrame()
+                # None = no intentado; [] = intentado, sin datos; lista = datos cacheados
+                rows_bw_cached = st.session_state.get(_bw_city_key)
+
+                if rows_bw_cached is None:
+                    conn_bw = _conectar_bases_web()
+                    if not conn_bw:
+                        st.session_state[_bw_city_key] = []
 
                 if conn_bw:
                     try:
@@ -783,15 +808,23 @@ try:
                         conn_bw.close()
 
                         if rows_bw:
+                            st.session_state[_bw_city_key] = rows_bw
                             df_ciudades = pd.DataFrame(rows_bw)
                             # Pre-rellenar tipo desde clasificaciones guardadas
                             df_ciudades['tipo'] = df_ciudades['ciudad'].map(
                                 lambda c: ciudad_tipo_guardado.get(c, 'nacional')
                             )
                         else:
+                            st.session_state[_bw_city_key] = []
                             st.warning("No se encontraron seriales en histo para esta planilla y mensajero.")
                     except Exception as e_bw:
+                        st.session_state[_bw_city_key] = []
                         st.warning(f"Error al consultar histo: {e_bw}")
+                elif rows_bw_cached:
+                    df_ciudades = pd.DataFrame(rows_bw_cached)
+                    df_ciudades['tipo'] = df_ciudades['ciudad'].map(
+                        lambda c: ciudad_tipo_guardado.get(c, 'nacional')
+                    )
 
                 if df_ciudades.empty:
                     st.info("Sin datos de ciudad desde histo. Usa el ajuste manual abajo.")
