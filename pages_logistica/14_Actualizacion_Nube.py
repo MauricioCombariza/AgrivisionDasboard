@@ -365,8 +365,13 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
     """
     Inserta filas individuales en seriales_gestion para registros desde mayo 2026
     y sincroniza automáticamente la tabla ordenes.
-    df_seriales debe tener: serial, f_esc, cod_men, lot_esc, mot_esc, no_entidad.
-    Opcionales: f_emi (para fecha_recepcion y corte), n_servicio, planilla, orden, ciudad1.
+    df_seriales debe tener: serial, f_emi o f_esc, cod_men, lot_esc, mot_esc, no_entidad.
+    Opcionales: n_servicio, planilla, orden, ciudad1.
+
+    Seriales sin f_esc válido (aún no escaneados) se insertan con fecha_escaner = f_emi
+    y cod_men = '0000' para que queden registrados como pendientes de gestión.
+    Cuando el pipeline vuelva a correr con f_esc disponible, el ON DUPLICATE KEY
+    actualiza los campos de gestión (porque estado='pendiente').
     """
     # Corte por f_emi (fecha emisión de la orden) cuando está disponible;
     # iMile no tiene f_emi en el df, usa f_esc como equivalente.
@@ -422,10 +427,24 @@ def _insertar_seriales_gestion_nube(df_seriales, conn, precios_men, precios_cli,
             else:
                 tipo_envio = "sobre"
 
-            fecha_esc    = str(row["f_esc"]).replace(".", "-")
+            # fecha_escaner: usar f_esc si tiene formato válido AAAA.MM.DD,
+            # si no (serial aún no escaneado) usar f_emi como placeholder.
+            _fesc_raw   = str(row.get("f_esc", "") or "").strip()
+            _fesc_valid = (len(_fesc_raw) == 10 and _fesc_raw[4:5] == "." and _fesc_raw[7:8] == ".")
+            if _fesc_valid:
+                fecha_esc    = _fesc_raw.replace(".", "-")
+                mot          = str(row.get("mot_esc", "") or "").lower().strip()
+                tipo_gestion = "Entrega" if "entrega" in mot else "Devolucion"
+            else:
+                _femi_raw = str(row.get("f_emi", "") or "").strip()
+                fecha_esc = _femi_raw.replace(".", "-") if _femi_raw else ""
+                if not fecha_esc:
+                    continue
+                cod_men      = "0000"
+                planilla     = ""
+                tipo_gestion = "Entrega"
+
             cliente      = str(row["no_entidad"])
-            mot          = str(row["mot_esc"]).lower().strip()
-            tipo_gestion = "Entrega" if "entrega" in mot else "Devolucion"
             tipo_key     = "entrega" if tipo_gestion == "Entrega" else "devolucion"
             cliente_key  = cliente.upper().strip()
 
