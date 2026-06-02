@@ -36,20 +36,6 @@ if 'facturacion_schema_ok' not in st.session_state:
         except Exception:
             conn.rollback()
 
-    try:
-        _c_fix = conn.cursor()
-        _c_fix.execute("""
-            UPDATE gestiones_mensajero gm
-            JOIN facturas_recibidas fr ON gm.facturado_liq = fr.id
-            JOIN personal p ON fr.personal_id = p.id
-            SET gm.facturado_liq = NULL
-            WHERE CAST(gm.cod_mensajero AS UNSIGNED) != CAST(p.codigo AS UNSIGNED)
-        """)
-        conn.commit()
-        _c_fix.close()
-    except Exception:
-        conn.rollback()
-
     st.session_state['facturacion_schema_ok'] = True
 
 _secciones = [
@@ -2481,15 +2467,21 @@ if _seccion == "🏙️ Facturación Ciudades":
 
     def _conectar_bases_web_fc():
         """Conexión de lectura a bases_web para consultar histo (clasificación de ciudades)."""
+        import socket
         try:
-            return mysql.connector.connect(
+            cnx = mysql.connector.connect(
                 host=os.environ.get("DB_HOST_BASES_WEB", "186.180.15.66"),
                 port=int(os.environ.get("DB_PORT_BASES_WEB", "12539")),
                 user=os.environ.get("DB_USER_BASES_WEB", "servilla_remoto"),
                 password=os.environ.get("DB_PASSWORD_BASES_WEB", ""),
                 database=os.environ.get("DB_NAME_BASES_WEB", "bases_web"),
-                connect_timeout=10,
+                connect_timeout=8,
+                connection_timeout=8,
             )
+            # Aplicar timeout a nivel de socket para que las queries no cuelguen
+            if hasattr(cnx, '_socket') and cnx._socket:
+                cnx._socket.settimeout(15)
+            return cnx
         except Exception:
             return None
 
