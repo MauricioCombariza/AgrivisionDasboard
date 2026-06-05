@@ -2718,21 +2718,31 @@ if _seccion == "🏙️ Facturación Ciudades":
                                 planillas[pl_match]['cantidad_nacional'] += int(rh['cnt'])
                             planillas[pl_match]['_histo_ok'] = True
                     _ch.close()
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        conn_bw.close()
+                    except Exception:
+                        pass
 
-                    # Fallback para couriers SIN NUMERO: planilla='' en histo,
-                    # asignadas localmente via courier_planilla_asignada.
-                    # El año de fecha_escaner en gestiones es el discriminador
-                    # correcto porque el Paso 5 agrupa por año.
-                    _missing_histo = [
-                        (pl, d) for pl, d in planillas.items()
-                        if not d.get('_histo_ok')
-                    ]
-                    if _missing_histo:
-                        _ch2 = conn_bw.cursor(dictionary=True)
+            # Fallback para couriers SIN NUMERO: planilla='' en histo,
+            # asignadas localmente via courier_planilla_asignada.
+            # El año de fecha_escaner en gestiones es el discriminador
+            # correcto porque el Paso 5 agrupa por año.
+            _missing_histo = [
+                (pl, d) for pl, d in planillas.items()
+                if d.get('_source') == 'gm' and not d.get('_histo_ok')
+            ]
+            if _missing_histo:
+                _conn_bw2 = _conectar_bases_web_fc()
+                if _conn_bw2:
+                    try:
                         for _pl_m, _d_m in _missing_histo:
                             _yr_m = str(_d_m.get('fecha_escaner', ''))[:4]
                             if not _yr_m.isdigit():
                                 continue
+                            _ch2 = _conn_bw2.cursor(dictionary=True)
                             _ch2.execute("""
                                 SELECT
                                     COALESCE(NULLIF(TRIM(ciudad1),''), 'Sin ciudad') AS ciudad,
@@ -2751,14 +2761,14 @@ if _seccion == "🏙️ Facturación Ciudades":
                                 else:
                                     planillas[_pl_m]['cantidad_nacional'] += int(rh2['cnt'])
                                 planillas[_pl_m]['_histo_ok'] = True
-                        _ch2.close()
-                except Exception:
-                    pass
-                finally:
-                    try:
-                        conn_bw.close()
-                    except Exception:
-                        pass
+                            _ch2.close()
+                    except Exception as _e_fb:
+                        st.warning(f"⚠️ Fallback histo SIN NUMERO: {_e_fb}")
+                    finally:
+                        try:
+                            _conn_bw2.close()
+                        except Exception:
+                            pass
 
         # ── Mayo+: seriales_gestion ───────────────────────────────────────────
         if hasta >= _CORTE_SG_FC:
