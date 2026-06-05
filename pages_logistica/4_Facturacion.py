@@ -1208,7 +1208,7 @@ if _seccion == "👷 Pago Personal":
                               AND DATE(fecha_escaner) < '2026-05-01'
                             GROUP BY CAST(cod_mensajero AS UNSIGNED)
                             UNION ALL
-                            SELECT CAST(cod_men AS UNSIGNED) as cod_u,
+                            SELECT CAST(NULLIF(TRIM(cod_men), '') AS UNSIGNED) as cod_u,
                                    COUNT(DISTINCT planilla) as planillas_pendientes,
                                    COUNT(*)                 as seriales_pendientes,
                                    SUM(precio_mensajero)    as total_pendiente
@@ -1217,7 +1217,7 @@ if _seccion == "👷 Pago Personal":
                               AND DATE(fecha_escaner) BETWEEN %s AND %s
                               AND fecha_escaner >= '2026-05-01'
                               AND planilla IS NOT NULL AND planilla != ''
-                            GROUP BY CAST(cod_men AS UNSIGNED)
+                            GROUP BY CAST(NULLIF(TRIM(cod_men), '') AS UNSIGNED)
                         ) combined
                         JOIN personal p ON CAST(p.codigo AS UNSIGNED) = combined.cod_u
                         WHERE p.activo = TRUE
@@ -1405,7 +1405,7 @@ if _seccion == "👷 Pago Personal":
                                MAX(cliente) as cliente,
                                MAX(liquidacion_id) as facturado_liq
                         FROM seriales_gestion
-                        WHERE CAST(cod_men AS UNSIGNED) = CAST(%s AS UNSIGNED)
+                        WHERE CAST(NULLIF(TRIM(cod_men), '') AS UNSIGNED) = CAST(%s AS UNSIGNED)
                           AND DATE(fecha_escaner) BETWEEN %s AND %s
                           AND fecha_escaner >= '2026-05-01'
                           AND planilla IS NOT NULL AND planilla != ''
@@ -1439,7 +1439,7 @@ if _seccion == "👷 Pago Personal":
                                COUNT(*) as total_seriales,
                                SUM(precio_mensajero) as total_valor
                         FROM seriales_gestion
-                        WHERE CAST(cod_men AS UNSIGNED) = CAST(%s AS UNSIGNED)
+                        WHERE CAST(NULLIF(TRIM(cod_men), '') AS UNSIGNED) = CAST(%s AS UNSIGNED)
                           AND DATE(fecha_escaner) BETWEEN %s AND %s
                           AND fecha_escaner >= '2026-05-01'
                           AND planilla IS NOT NULL AND planilla != ''
@@ -1545,7 +1545,7 @@ if _seccion == "👷 Pago Personal":
                                                 if pl.get('fuente') == 'sg':
                                                     cw_ul.execute(
                                                         "UPDATE seriales_gestion SET liquidacion_id = NULL "
-                                                        "WHERE planilla = %s AND CAST(cod_men AS UNSIGNED) = CAST(%s AS UNSIGNED)",
+                                                        "WHERE planilla = %s AND CAST(NULLIF(TRIM(cod_men), '') AS UNSIGNED) = CAST(%s AS UNSIGNED)",
                                                         (pl['lot_esc'], worker_codigo)
                                                     )
                                                 else:
@@ -1780,7 +1780,7 @@ if _seccion == "👷 Pago Personal":
                                         for lot in _sg_lots:
                                             cw.execute(
                                                 "UPDATE seriales_gestion SET liquidacion_id = %s "
-                                                "WHERE planilla = %s AND CAST(cod_men AS UNSIGNED) = CAST(%s AS UNSIGNED)",
+                                                "WHERE planilla = %s AND CAST(NULLIF(TRIM(cod_men), '') AS UNSIGNED) = CAST(%s AS UNSIGNED)",
                                                 (factura_id_nuevo, lot, worker_codigo)
                                             )
                                         conn.commit()
