@@ -7,7 +7,6 @@ Type=simple
 User=root
 WorkingDirectory=/opt/carvajal
 Environment=PATH=/root/miniconda3/envs/dashboard/bin
-ExecStartPre=/bin/bash -c '/usr/bin/pkill -f "streamlit run" || true'
 ExecStart=/root/miniconda3/envs/dashboard/bin/streamlit run app.py --server.port=8501 --server.address=0.0.0.0
 Restart=always
 RestartSec=5
