@@ -309,6 +309,25 @@ try:
                                         f" AND CAST(orden AS UNSIGNED) IN ({_ph_or}))"
                                     )
                                     _hdr_base_params += _override_cod_men_hdr + _override_orders
+                                else:
+                                    # courier SIN NUMERO: el sync inserta con orden=NULL →
+                                    # no hay órdenes para cruzar; usar el año de la planilla
+                                    # como discriminador (el Paso 5 agrupa por año).
+                                    _cur_yr_hdr = conn.cursor(dictionary=True)
+                                    _cur_yr_hdr.execute(
+                                        "SELECT YEAR(MIN(fecha_escaner)) AS yr "
+                                        "FROM gestiones_mensajero WHERE lot_esc = %s",
+                                        (num_planilla,)
+                                    )
+                                    _yr_row_hdr = _cur_yr_hdr.fetchone()
+                                    _cur_yr_hdr.close()
+                                    if _yr_row_hdr and _yr_row_hdr['yr']:
+                                        _hdr_extra_sql = (
+                                            f" OR (TRIM(cod_men) IN ({_ph_ov})"
+                                            f" AND TRIM(COALESCE(planilla,'')) = ''"
+                                            f" AND YEAR(f_esc) = %s)"
+                                        )
+                                        _hdr_base_params += _override_cod_men_hdr + [_yr_row_hdr['yr']]
 
                             _cur_hdr.execute(f"""
                                 SELECT COUNT(*) AS cnt FROM histo
@@ -793,6 +812,25 @@ try:
                                     f" AND CAST(orden AS UNSIGNED) IN ({_ph_or_c}))"
                                 )
                                 _city_params += _override_cod_city + _override_ord_c
+                            else:
+                                # courier SIN NUMERO: el sync inserta con orden=NULL →
+                                # no hay órdenes para cruzar; usar el año de la planilla
+                                # como discriminador (el Paso 5 agrupa por año).
+                                _cur_yr_city = conn.cursor(dictionary=True)
+                                _cur_yr_city.execute(
+                                    "SELECT YEAR(MIN(fecha_escaner)) AS yr "
+                                    "FROM gestiones_mensajero WHERE lot_esc = %s",
+                                    (lot_esc_planilla,)
+                                )
+                                _yr_row_city = _cur_yr_city.fetchone()
+                                _cur_yr_city.close()
+                                if _yr_row_city and _yr_row_city['yr']:
+                                    _city_extra_sql = (
+                                        f" OR (TRIM(cod_men) IN ({_ph_ov_c})"
+                                        f" AND TRIM(COALESCE(planilla,'')) = ''"
+                                        f" AND YEAR(f_esc) = %s)"
+                                    )
+                                    _city_params += _override_cod_city + [_yr_row_city['yr']]
 
                         cur_bw.execute(f"""
                             SELECT

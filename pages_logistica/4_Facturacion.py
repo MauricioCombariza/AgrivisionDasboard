@@ -2726,6 +2726,50 @@ if _seccion == "🏙️ Facturación Ciudades":
                     except Exception:
                         pass
 
+            # Fallback para couriers SIN NUMERO: planilla='' en histo,
+            # asignadas localmente via courier_planilla_asignada.
+            # El año de fecha_escaner en gestiones es el discriminador
+            # correcto porque el Paso 5 agrupa por año.
+            _missing_histo = [
+                (pl, d) for pl, d in planillas.items()
+                if d.get('_source') == 'gm' and not d.get('_histo_ok')
+            ]
+            if _missing_histo:
+                _conn_bw2 = _conectar_bases_web_fc()
+                if _conn_bw2:
+                    try:
+                        for _pl_m, _d_m in _missing_histo:
+                            _yr_m = str(_d_m.get('fecha_escaner', ''))[:4]
+                            if not _yr_m.isdigit():
+                                continue
+                            _ch2 = _conn_bw2.cursor(dictionary=True)
+                            _ch2.execute("""
+                                SELECT
+                                    COALESCE(NULLIF(TRIM(ciudad1),''), 'Sin ciudad') AS ciudad,
+                                    COUNT(*) AS cnt
+                                FROM histo
+                                WHERE TRIM(cod_men) = %s
+                                  AND TRIM(COALESCE(planilla,'')) = ''
+                                  AND YEAR(f_esc) = %s
+                                GROUP BY ciudad
+                            """, (cod_men, int(_yr_m)))
+                            for rh2 in _ch2.fetchall():
+                                _ck2 = (rh2['ciudad'] or '').lower().strip()
+                                _tipo2 = ciudad_map.get(_ck2, 'nacional')
+                                if _tipo2 == 'local':
+                                    planillas[_pl_m]['cantidad_local'] += int(rh2['cnt'])
+                                else:
+                                    planillas[_pl_m]['cantidad_nacional'] += int(rh2['cnt'])
+                                planillas[_pl_m]['_histo_ok'] = True
+                            _ch2.close()
+                    except Exception as _e_fb:
+                        st.warning(f"⚠️ Fallback histo SIN NUMERO: {_e_fb}")
+                    finally:
+                        try:
+                            _conn_bw2.close()
+                        except Exception:
+                            pass
+
         # ── Mayo+: seriales_gestion ───────────────────────────────────────────
         if hasta >= _CORTE_SG_FC:
             desde_sg = max(desde, _CORTE_SG_FC)
