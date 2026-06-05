@@ -1205,7 +1205,7 @@ if _seccion == "👷 Pago Personal":
                             FROM gestiones_mensajero
                             WHERE facturado_liq IS NULL
                               AND DATE(fecha_escaner) BETWEEN %s AND %s
-                              AND (DATE(fecha_escaner) < '2026-05-01' OR UPPER(TRIM(cliente)) NOT LIKE '%IMILE%')
+                              AND DATE(fecha_escaner) < '2026-05-01'
                             GROUP BY CAST(cod_mensajero AS UNSIGNED)
                             UNION ALL
                             SELECT CAST(cod_men AS UNSIGNED) as cod_u,
@@ -1386,7 +1386,7 @@ if _seccion == "👷 Pago Personal":
                         FROM gestiones_mensajero
                         WHERE CAST(cod_mensajero AS UNSIGNED) = CAST(%s AS UNSIGNED)
                           AND DATE(fecha_escaner) BETWEEN %s AND %s
-                          AND (DATE(fecha_escaner) < '2026-05-01' OR UPPER(TRIM(cliente)) NOT LIKE '%IMILE%')
+                          AND DATE(fecha_escaner) < '2026-05-01'
                         GROUP BY lot_esc
                         {cond_having}
                         ORDER BY DATE(MIN(fecha_escaner)) DESC
@@ -1431,7 +1431,7 @@ if _seccion == "👷 Pago Personal":
                         FROM gestiones_mensajero
                         WHERE CAST(cod_mensajero AS UNSIGNED) = CAST(%s AS UNSIGNED)
                           AND DATE(fecha_escaner) BETWEEN %s AND %s
-                          AND (DATE(fecha_escaner) < '2026-05-01' OR UPPER(TRIM(cliente)) NOT LIKE '%IMILE%')
+                          AND DATE(fecha_escaner) < '2026-05-01'
                     """, (worker_codigo, fecha_desde_mens, fecha_hasta_mens))
                     _rp_gm = cursor_t6.fetchone() or {}
                     cursor_t6.execute("""
