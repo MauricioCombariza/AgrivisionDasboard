@@ -1194,18 +1194,36 @@ if _seccion == "👷 Pago Personal":
                 if tipo_liq == "🚴 Planillas Mensajero":
                     cursor_todos.execute("""
                         SELECT p.nombre_completo, p.codigo,
-                               COUNT(DISTINCT gm.lot_esc) as planillas_pendientes,
-                               SUM(gm.total_seriales)    as seriales_pendientes,
-                               SUM(gm.valor_total)       as total_pendiente
-                        FROM gestiones_mensajero gm
-                        JOIN personal p ON CAST(gm.cod_mensajero AS UNSIGNED) = CAST(p.codigo AS UNSIGNED)
-                        WHERE gm.facturado_liq IS NULL
-                          AND DATE(gm.fecha_escaner) BETWEEN %s AND %s
-                          AND p.activo = TRUE
-                          AND (DATE(gm.fecha_escaner) < '2026-05-01' OR UPPER(TRIM(gm.cliente)) NOT LIKE '%IMILE%')
+                               SUM(combined.planillas_pendientes) as planillas_pendientes,
+                               SUM(combined.seriales_pendientes)  as seriales_pendientes,
+                               SUM(combined.total_pendiente)      as total_pendiente
+                        FROM (
+                            SELECT CAST(cod_mensajero AS UNSIGNED) as cod_u,
+                                   COUNT(DISTINCT lot_esc) as planillas_pendientes,
+                                   SUM(total_seriales)     as seriales_pendientes,
+                                   SUM(valor_total)        as total_pendiente
+                            FROM gestiones_mensajero
+                            WHERE facturado_liq IS NULL
+                              AND DATE(fecha_escaner) BETWEEN %s AND %s
+                              AND (DATE(fecha_escaner) < '2026-05-01' OR UPPER(TRIM(cliente)) NOT LIKE '%IMILE%')
+                            GROUP BY CAST(cod_mensajero AS UNSIGNED)
+                            UNION ALL
+                            SELECT CAST(cod_men AS UNSIGNED) as cod_u,
+                                   COUNT(DISTINCT planilla) as planillas_pendientes,
+                                   COUNT(*)                 as seriales_pendientes,
+                                   SUM(precio_mensajero)    as total_pendiente
+                            FROM seriales_gestion
+                            WHERE liquidacion_id IS NULL
+                              AND DATE(fecha_escaner) BETWEEN %s AND %s
+                              AND fecha_escaner >= '2026-05-01'
+                              AND planilla IS NOT NULL AND planilla != ''
+                            GROUP BY CAST(cod_men AS UNSIGNED)
+                        ) combined
+                        JOIN personal p ON CAST(p.codigo AS UNSIGNED) = combined.cod_u
+                        WHERE p.activo = TRUE
                         GROUP BY p.id, p.nombre_completo, p.codigo
                         ORDER BY p.nombre_completo
-                    """, (fecha_desde_todos, fecha_hasta_todos))
+                    """, (fecha_desde_todos, fecha_hasta_todos, fecha_desde_todos, fecha_hasta_todos))
                     resumen_todos = cursor_todos.fetchall()
 
                     if not resumen_todos:
@@ -1373,7 +1391,37 @@ if _seccion == "👷 Pago Personal":
                         {cond_having}
                         ORDER BY DATE(MIN(fecha_escaner)) DESC
                     """, (worker_codigo, fecha_desde_mens, fecha_hasta_mens))
-                    planillas = cursor_t6.fetchall()
+                    planillas_gm = cursor_t6.fetchall()
+                    for _p in planillas_gm:
+                        _p['fuente'] = 'gm'
+
+                    cond_having_sg = "HAVING MAX(liquidacion_id) IS NULL" if solo_pendientes else ""
+                    cursor_t6.execute(f"""
+                        SELECT planilla as lot_esc,
+                               MIN(fecha_escaner) as fecha_escaner,
+                               COUNT(*) as total_seriales,
+                               AVG(precio_mensajero) as valor_unitario,
+                               SUM(precio_mensajero) as valor_total,
+                               MAX(cliente) as cliente,
+                               MAX(liquidacion_id) as facturado_liq
+                        FROM seriales_gestion
+                        WHERE CAST(cod_men AS UNSIGNED) = CAST(%s AS UNSIGNED)
+                          AND DATE(fecha_escaner) BETWEEN %s AND %s
+                          AND fecha_escaner >= '2026-05-01'
+                          AND planilla IS NOT NULL AND planilla != ''
+                        GROUP BY planilla
+                        {cond_having_sg}
+                        ORDER BY DATE(MIN(fecha_escaner)) DESC
+                    """, (worker_codigo, fecha_desde_mens, fecha_hasta_mens))
+                    planillas_sg = cursor_t6.fetchall()
+                    for _p in planillas_sg:
+                        _p['fuente'] = 'sg'
+
+                    planillas = sorted(
+                        planillas_gm + planillas_sg,
+                        key=lambda x: str(x.get('fecha_escaner') or '').replace('.', '-'),
+                        reverse=True
+                    )
 
                     # Totales del período completo (para comparar con Planilla Check)
                     cursor_t6.execute("""
@@ -1385,7 +1433,26 @@ if _seccion == "👷 Pago Personal":
                           AND DATE(fecha_escaner) BETWEEN %s AND %s
                           AND (DATE(fecha_escaner) < '2026-05-01' OR UPPER(TRIM(cliente)) NOT LIKE '%IMILE%')
                     """, (worker_codigo, fecha_desde_mens, fecha_hasta_mens))
-                    resumen_periodo = cursor_t6.fetchone() or {}
+                    _rp_gm = cursor_t6.fetchone() or {}
+                    cursor_t6.execute("""
+                        SELECT COUNT(DISTINCT planilla) as total_planillas,
+                               COUNT(*) as total_seriales,
+                               SUM(precio_mensajero) as total_valor
+                        FROM seriales_gestion
+                        WHERE CAST(cod_men AS UNSIGNED) = CAST(%s AS UNSIGNED)
+                          AND DATE(fecha_escaner) BETWEEN %s AND %s
+                          AND fecha_escaner >= '2026-05-01'
+                          AND planilla IS NOT NULL AND planilla != ''
+                    """, (worker_codigo, fecha_desde_mens, fecha_hasta_mens))
+                    _rp_sg = cursor_t6.fetchone() or {}
+                    resumen_periodo = {
+                        'total_planillas': (int(_rp_gm.get('total_planillas') or 0) +
+                                            int(_rp_sg.get('total_planillas') or 0)),
+                        'total_seriales':  (int(_rp_gm.get('total_seriales') or 0) +
+                                            int(_rp_sg.get('total_seriales') or 0)),
+                        'total_valor':     (float(_rp_gm.get('total_valor') or 0) +
+                                            float(_rp_sg.get('total_valor') or 0)),
+                    }
 
                     if not planillas:
                         total_plan_periodo = int(resumen_periodo.get('total_planillas') or 0)
@@ -1412,12 +1479,12 @@ if _seccion == "👷 Pago Personal":
                         with col_sel1:
                             if st.button("☑️ Seleccionar todas", key="btn_sel_todas_mens"):
                                 for p in pendientes_lista:
-                                    st.session_state[f"liq_pl_{p['lot_esc']}"] = True
+                                    st.session_state[f"liq_pl_{p.get('fuente','gm')}_{p['lot_esc']}"] = True
                                 st.rerun()
                         with col_sel2:
                             if st.button("⬜ Deseleccionar", key="btn_desel_mens"):
                                 for p in pendientes_lista:
-                                    st.session_state[f"liq_pl_{p['lot_esc']}"] = False
+                                    st.session_state[f"liq_pl_{p.get('fuente','gm')}_{p['lot_esc']}"] = False
                                 st.rerun()
 
                         # Encabezados de tabla — courier externo no muestra Val. Unit. / Total
@@ -1440,6 +1507,7 @@ if _seccion == "👷 Pago Personal":
 
                         total_sel_mens = 0.0
                         planillas_sel = []
+                        _sg_lots = set()  # lot_esc values from seriales_gestion
 
                         for pl in planillas:
                             ya_liquidada = pl.get('facturado_liq') is not None
@@ -1471,14 +1539,21 @@ if _seccion == "👷 Pago Personal":
                                 c0, c1, c2, c3, c4, c5, c6 = st.columns([0.5, 2, 1.5, 2, 1, 1.5, 1.5])
                                 with c0:
                                     if ya_liquidada:
-                                        if st.button("↩", key=f"unliq_pl_{pl['lot_esc']}", help="Desliquidar planilla"):
+                                        if st.button("↩", key=f"unliq_pl_{pl.get('fuente','gm')}_{pl['lot_esc']}", help="Desliquidar planilla"):
                                             try:
                                                 cw_ul = conn.cursor()
-                                                cw_ul.execute(
-                                                    "UPDATE gestiones_mensajero SET facturado_liq = NULL "
-                                                    "WHERE lot_esc = %s AND CAST(cod_mensajero AS UNSIGNED) = CAST(%s AS UNSIGNED)",
-                                                    (pl['lot_esc'], worker_codigo)
-                                                )
+                                                if pl.get('fuente') == 'sg':
+                                                    cw_ul.execute(
+                                                        "UPDATE seriales_gestion SET liquidacion_id = NULL "
+                                                        "WHERE planilla = %s AND CAST(cod_men AS UNSIGNED) = CAST(%s AS UNSIGNED)",
+                                                        (pl['lot_esc'], worker_codigo)
+                                                    )
+                                                else:
+                                                    cw_ul.execute(
+                                                        "UPDATE gestiones_mensajero SET facturado_liq = NULL "
+                                                        "WHERE lot_esc = %s AND CAST(cod_mensajero AS UNSIGNED) = CAST(%s AS UNSIGNED)",
+                                                        (pl['lot_esc'], worker_codigo)
+                                                    )
                                                 conn.commit()
                                                 cw_ul.close()
                                                 st.rerun()
@@ -1487,7 +1562,7 @@ if _seccion == "👷 Pago Personal":
                                                 st.error(f"Error: {e}")
                                     else:
                                         chk = st.checkbox(
-                                            "s", key=f"liq_pl_{pl['lot_esc']}",
+                                            "s", key=f"liq_pl_{pl.get('fuente','gm')}_{pl['lot_esc']}",
                                             label_visibility="collapsed"
                                         )
                                 with c1:
@@ -1501,6 +1576,8 @@ if _seccion == "👷 Pago Personal":
 
                             if chk:
                                 planillas_sel.append(pl['lot_esc'])
+                                if pl.get('fuente') == 'sg':
+                                    _sg_lots.add(pl['lot_esc'])
                                 total_sel_mens += float(pl['total_seriales'] or 0) if es_courier_externo else float(pl['valor_total'] or 0)
 
                         # ── Sección de liquidación ────────────────────────────
@@ -1693,10 +1770,17 @@ if _seccion == "👷 Pago Personal":
                                               obs_mens or f"Planillas: {', '.join(str(p) for p in planillas_sel)}"))
 
                                         factura_id_nuevo = cw.lastrowid
-                                        for lot in planillas_sel:
+                                        _gm_lots_liq = [l for l in planillas_sel if l not in _sg_lots]
+                                        for lot in _gm_lots_liq:
                                             cw.execute(
                                                 "UPDATE gestiones_mensajero SET facturado_liq = %s "
                                                 "WHERE lot_esc = %s AND CAST(cod_mensajero AS UNSIGNED) = CAST(%s AS UNSIGNED)",
+                                                (factura_id_nuevo, lot, worker_codigo)
+                                            )
+                                        for lot in _sg_lots:
+                                            cw.execute(
+                                                "UPDATE seriales_gestion SET liquidacion_id = %s "
+                                                "WHERE planilla = %s AND CAST(cod_men AS UNSIGNED) = CAST(%s AS UNSIGNED)",
                                                 (factura_id_nuevo, lot, worker_codigo)
                                             )
                                         conn.commit()
@@ -2117,11 +2201,16 @@ if _seccion == "👷 Pago Personal":
                                         "SET estado = 'pendiente', saldo_pendiente = total WHERE id = %s",
                                         (liq['id'],)
                                     )
-                                    # Para mensajero: limpiar facturado_liq en gestiones_mensajero
+                                    # Para mensajero: limpiar facturado_liq / liquidacion_id en ambas tablas
                                     if liq['tipo'] == 'mensajero':
                                         cw_u.execute(
                                             "UPDATE gestiones_mensajero SET facturado_liq = NULL "
                                             "WHERE facturado_liq = %s",
+                                            (liq['id'],)
+                                        )
+                                        cw_u.execute(
+                                            "UPDATE seriales_gestion SET liquidacion_id = NULL "
+                                            "WHERE liquidacion_id = %s",
                                             (liq['id'],)
                                         )
                                     # Para alistamiento: revertir liquidado en registros del trabajador
@@ -2189,6 +2278,11 @@ if _seccion == "👷 Pago Personal":
                                     cw_dl.execute(
                                         "UPDATE gestiones_mensajero SET facturado_liq = NULL "
                                         "WHERE facturado_liq = %s",
+                                        (liq_id,)
+                                    )
+                                    cw_dl.execute(
+                                        "UPDATE seriales_gestion SET liquidacion_id = NULL "
+                                        "WHERE liquidacion_id = %s",
                                         (liq_id,)
                                     )
                                 elif row['tipo'] == 'alistamiento':
