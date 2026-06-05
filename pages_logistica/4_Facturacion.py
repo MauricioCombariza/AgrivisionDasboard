@@ -1205,7 +1205,7 @@ if _seccion == "👷 Pago Personal":
                             FROM gestiones_mensajero
                             WHERE facturado_liq IS NULL
                               AND DATE(fecha_escaner) BETWEEN %s AND %s
-                              AND DATE(fecha_escaner) < '2026-05-01'
+                              AND (DATE(fecha_escaner) < '2026-05-01' OR UPPER(TRIM(cliente)) NOT LIKE '%IMILE%')
                             GROUP BY CAST(cod_mensajero AS UNSIGNED)
                             UNION ALL
                             SELECT CAST(NULLIF(TRIM(cod_men), '') AS UNSIGNED) as cod_u,
@@ -1217,6 +1217,7 @@ if _seccion == "👷 Pago Personal":
                               AND DATE(fecha_escaner) BETWEEN %s AND %s
                               AND fecha_escaner >= '2026-05-01'
                               AND planilla IS NOT NULL AND planilla != ''
+                              AND UPPER(TRIM(cliente)) LIKE '%IMILE%'
                             GROUP BY CAST(NULLIF(TRIM(cod_men), '') AS UNSIGNED)
                         ) combined
                         JOIN personal p ON CAST(p.codigo AS UNSIGNED) = combined.cod_u
@@ -1386,7 +1387,7 @@ if _seccion == "👷 Pago Personal":
                         FROM gestiones_mensajero
                         WHERE CAST(cod_mensajero AS UNSIGNED) = CAST(%s AS UNSIGNED)
                           AND DATE(fecha_escaner) BETWEEN %s AND %s
-                          AND DATE(fecha_escaner) < '2026-05-01'
+                          AND (DATE(fecha_escaner) < '2026-05-01' OR UPPER(TRIM(cliente)) NOT LIKE '%IMILE%')
                         GROUP BY lot_esc
                         {cond_having}
                         ORDER BY DATE(MIN(fecha_escaner)) DESC
@@ -1409,6 +1410,7 @@ if _seccion == "👷 Pago Personal":
                           AND DATE(fecha_escaner) BETWEEN %s AND %s
                           AND fecha_escaner >= '2026-05-01'
                           AND planilla IS NOT NULL AND planilla != ''
+                          AND UPPER(TRIM(cliente)) LIKE '%IMILE%'
                         GROUP BY planilla
                         {cond_having_sg}
                         ORDER BY DATE(MIN(fecha_escaner)) DESC
@@ -1431,7 +1433,7 @@ if _seccion == "👷 Pago Personal":
                         FROM gestiones_mensajero
                         WHERE CAST(cod_mensajero AS UNSIGNED) = CAST(%s AS UNSIGNED)
                           AND DATE(fecha_escaner) BETWEEN %s AND %s
-                          AND DATE(fecha_escaner) < '2026-05-01'
+                          AND (DATE(fecha_escaner) < '2026-05-01' OR UPPER(TRIM(cliente)) NOT LIKE '%IMILE%')
                     """, (worker_codigo, fecha_desde_mens, fecha_hasta_mens))
                     _rp_gm = cursor_t6.fetchone() or {}
                     cursor_t6.execute("""
@@ -1443,6 +1445,7 @@ if _seccion == "👷 Pago Personal":
                           AND DATE(fecha_escaner) BETWEEN %s AND %s
                           AND fecha_escaner >= '2026-05-01'
                           AND planilla IS NOT NULL AND planilla != ''
+                          AND UPPER(TRIM(cliente)) LIKE '%IMILE%'
                     """, (worker_codigo, fecha_desde_mens, fecha_hasta_mens))
                     _rp_sg = cursor_t6.fetchone() or {}
                     resumen_periodo = {
