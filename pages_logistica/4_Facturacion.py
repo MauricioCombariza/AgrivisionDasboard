@@ -2737,13 +2737,12 @@ if _seccion == "🏙️ Facturación Ciudades":
             if _missing_histo:
                 _conn_bw2 = _conectar_bases_web_fc()
                 if not _conn_bw2:
-                    st.warning("⚠️ [debug] Fallback SIN NUMERO: no se pudo conectar a bases_web")
+                    pass
                 else:
                     try:
                         for _pl_m, _d_m in _missing_histo:
                             _yr_m = str(_d_m.get('fecha_escaner', ''))[:4]
                             if not _yr_m.isdigit():
-                                st.info(f"[debug] Planilla {_pl_m}: fecha_escaner inválida → '{_d_m.get('fecha_escaner')}'")
                                 continue
                             _ch2 = _conn_bw2.cursor(dictionary=True)
                             _ch2.execute("""
@@ -2758,8 +2757,6 @@ if _seccion == "🏙️ Facturación Ciudades":
                             """, (cod_men, int(_yr_m)))
                             _rows2 = _ch2.fetchall()
                             _ch2.close()
-                            if not _rows2:
-                                st.info(f"[debug] Planilla {_pl_m}: fallback cod_men={cod_men!r} año={_yr_m} → 0 filas en histo")
                             for rh2 in _rows2:
                                 _ck2 = (rh2['ciudad'] or '').lower().strip()
                                 _tipo2 = ciudad_map.get(_ck2, 'nacional')
