@@ -2776,6 +2776,18 @@ if _seccion == "🏙️ Facturación Ciudades":
                         except Exception:
                             pass
 
+        # Planillas pre-mayo con precio ya guardado en gestiones_mensajero:
+        # no necesitan clasificación histo — usar valor_total_gm directamente.
+        # Sigue el patrón de 13_Planillas_Mensajeros_Check: mostrar sin bloquear.
+        for _pl, _d in planillas.items():
+            if (_d.get('_source') == 'gm'
+                    and not _d.get('_histo_ok')
+                    and _d.get('_tiene_editado')
+                    and float(_d.get('_valor_total_gm') or 0) > 0):
+                _d['_histo_ok'] = True
+                _d['_usar_valor_gm'] = True
+                _d['cantidad_local'] = _d['_seriales_gm']  # evita total==0
+
         # ── Mayo+: seriales_gestion ───────────────────────────────────────────
         if hasta >= _CORTE_SG_FC:
             desde_sg = max(desde, _CORTE_SG_FC)
@@ -2862,6 +2874,15 @@ if _seccion == "🏙️ Facturación Ciudades":
                 p_n = d.get('_precio_nac_sg', 0.0)
                 v_l = d.get('_valor_local_sg', 0.0)
                 v_n = d.get('_valor_nac_sg', 0.0)
+            elif d.get('_usar_valor_gm'):
+                # Precio ya guardado en gestiones_mensajero; histo no disponible.
+                # Usar SUM(valor_total) de gestiones directamente (patrón de página 13).
+                _vgm = float(d['_valor_total_gm'])
+                _sgm = max(int(d.get('_seriales_gm') or 0), 1)
+                p_l = round(_vgm / _sgm, 2)
+                p_n = p_l
+                v_l = _vgm
+                v_n = 0.0
             elif d.get('_tiene_editado') and d.get('_precio_guardado', 0) > 0:
                 # Planilla con precios guardados manualmente en gestiones: usar
                 # el precio promedio de los registros editados (no personal.tarifa).
